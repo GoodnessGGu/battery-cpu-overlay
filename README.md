@@ -1,6 +1,6 @@
 # Battery & CPU Wattage Overlay
 
-An ultra-lightweight, battery-efficient real-time overlay for Windows laptops that monitors power draw (Watts), battery percentage, CPU temperature, and estimated battery life.
+An ultra-lightweight, battery-efficient real-time overlay for Windows laptops that monitors power draw (Watts), battery percentage, CPU temperature, estimated battery life, and an **automatic battery session counter**.
 
 Designed specifically to be sleek, distraction-free, and consume virtually zero system resources (<0.05% CPU).
 
@@ -13,6 +13,15 @@ Designed specifically to be sleek, distraction-free, and consume virtually zero 
   - **Amber** (8.5 W – 15 W): Normal / moderate usage.
   - **Red** (> 15 W): Heavy energy consumption.
   - **Emerald Green**: Plugged into AC (displays live `+X.X W` charging rate).
+- **📊 Dynamic Battery Session Counter Card (New!):**
+  - **Auto-Trigger on Battery:** Activates automatically the moment AC power is unplugged.
+  - **Running Stopwatch:** Live elapsed timer (`HH:MM:SS`) tracking your active battery session.
+  - **Starting Charge Tracker:** Captures and displays the exact battery percentage and timestamp when AC power was disconnected (e.g. `Start: 85% (11:30 AM)`).
+  - **Power Consumed:** Live percentage dropped (e.g. `Used: 12%`).
+  - **Energy Telemetry:** Real-time energy drained in Watt-hours (`-3.8 Wh`) and session average power draw (`Avg 9.2 W`).
+  - **AC Final Session Summary:** When plugged back into AC, the timer freezes and logs the complete session summary until your next battery run.
+  - **Persistent Session State:** Remembers elapsed time and initial percentages across overlay minimizations, toggles, and app restarts during the same battery run.
+  - **Collapsible:** Toggle the card open or closed via the `▾` button or right-click menu.
 - **🌡️ Live CPU Temperature:** Real-time thermal sensor reading (`°C`) via Windows ACPI Thermal Zone, with dynamic thermal color alerts.
 - **🔋 Battery Percentage & Health State:** Shows remaining capacity and shifts to low-battery indicators when needed.
 - **⏱️ Dynamic Time Remaining:** Constantly calculated based on your immediate real-time discharge rate.
@@ -24,7 +33,7 @@ Designed specifically to be sleek, distraction-free, and consume virtually zero 
 - **📌 System Tray ("Hidden Icons") Integration:**
   - **Zero Taskbar Clutter:** Does not occupy space on your main taskbar.
   - Lives quietly in your Windows notification area / hidden icons tray (`^`).
-  - Hovering displays a live status tooltip (`Bat: 40% (8.4 W) | CPU: 55°C`).
+  - Hovering displays a live status tooltip (`Bat: 40% (8.4 W) | 01:24:35 (-15%) | CPU: 55°C`).
   - Left-click tray icon to show/hide the floating overlay instantly.
   - Clicking `✕` on the overlay minimizes it directly to the tray.
 
@@ -55,11 +64,12 @@ This creates a **Battery Overlay** shortcut directly on your Desktop with native
 | Action | Result |
 | :--- | :--- |
 | **Left Click + Drag** | Move overlay anywhere on screen (auto-saves position). |
-| **Double Click** | Toggle between **Full View** (`⚡ 8.4 W  •  🔋 40%  •  🌡️ 55°C  •  ⏱️ 1h 42m`) and **Compact View** (`⚡ 8.4 W  •  🌡️ 55°C`). |
-| **Right Click (Overlay)** | Open settings menu (Compact Mode, Always On Top, Opacity, Refresh Rate, Reset Position, Exit). |
+| **Double Click** | Toggle between **Full View** (with Session Card) and **Compact View** (`⚡ 8.4 W  •  🌡️ 55°C`). |
+| **Click `▾` / `▴`** | Collapse or expand the Battery Session Counter Card. |
+| **Right Click (Overlay)** | Open settings menu (Compact Mode, Show/Hide Session Card, Reset Counter, Always On Top, Opacity, Refresh Rate, Reset Position, Exit). |
 | **Click `✕`** | Minimize / hide overlay to the Hidden Icons tray. |
 | **Tray Icon (Left Click)** | Toggle overlay visibility (Show / Hide). |
-| **Tray Icon (Right Click)** | Access quick controls or **Exit Completely**. |
+| **Tray Icon (Right Click)** | Access quick controls, toggle session card, or **Exit Completely**. |
 
 ---
 
@@ -68,7 +78,7 @@ This creates a **Battery Overlay** shortcut directly on your Desktop with native
 Unlike Electron or Webview-based widgets that consume hundreds of megabytes of RAM and constantly keep CPU cores awake, this app:
 - Uses **native Windows Presentation Foundation (WPF)** and .NET.
 - Uses **no third-party drivers or external dependencies**.
-- Idles on a lightweight 2-second timer with **< 0.05% CPU usage**.
+- Idles with **< 0.05% CPU usage**.
 - Consumes virtually 0 mW of battery itself.
 
 ---
