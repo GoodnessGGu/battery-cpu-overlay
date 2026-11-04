@@ -1,0 +1,8 @@
+# Runtime settings & logs
+settings.json
+*.log
+*.tmp
+
+# VS Code / IDE
+.vscode/
+.idea/
