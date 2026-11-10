@@ -1,4 +1,4 @@
-# Real-Time Battery Wattage, CPU Temperature & Session Tracking Overlay
+﻿# Real-Time Battery Wattage, CPU Temperature & Active Battery Session Tracker
 # Ultra-lightweight, battery-efficient WPF overlay with System Tray ("Hidden Icons") support
 
 Add-Type -AssemblyName PresentationFramework
@@ -33,19 +33,22 @@ $Settings = @{
     ShowSessionCard = $true
 }
 
-# Session State
+# Session State - Tracks ACTIVE awake time only (pauses in sleep)
 $SessionState = @{
     IsActive = $false
-    StartTime = $null          # ISO DateTime string
-    StartPercent = 0
-    StartMWh = 0
-    LastDuration = "00:00:00"
-    LastUsedPercent = 0
-    LastUsedWh = 0.0
-    LastAvgWatts = 0.0
+    ActiveSeconds = 0.0          # Accumulated ACTIVE awake seconds only
+    StartTime = $null            # ISO string when battery session began
+    StartPercent = 0             # Battery % when AC was disconnected
+    StartMWh = 0.0               # Battery mWh when AC was disconnected
+    LastDuration = "00:00:00"    # Final active duration of last session
+    LastUsedPercent = 0          # Final % dropped in last session
+    LastUsedWh = 0.0             # Final Wh consumed in last session
+    LastAvgWatts = 0.0           # Final average wattage in last session
     HasLastSession = $false
+    LastDisconnectTime = $null   # Timestamp of latest AC disconnect event
 }
 
+# Load settings if available
 if (Test-Path $SettingsFile) {
     try {
         $Loaded = Get-Content $SettingsFile -Raw | ConvertFrom-Json
@@ -57,10 +60,11 @@ if (Test-Path $SettingsFile) {
         if ($null -ne $Loaded.Topmost) { $Settings.Topmost = [bool]$Loaded.Topmost }
         if ($null -ne $Loaded.ShowSessionCard) { $Settings.ShowSessionCard = [bool]$Loaded.ShowSessionCard }
         
-        # Load saved session if available
+        # Load saved session
         if ($Loaded.SessionState) {
             $ss = $Loaded.SessionState
             if ($ss.StartTime) { $SessionState.StartTime = [string]$ss.StartTime }
+            if ($null -ne $ss.ActiveSeconds) { $SessionState.ActiveSeconds = [double]$ss.ActiveSeconds }
             if ($ss.StartPercent) { $SessionState.StartPercent = [int]$ss.StartPercent }
             if ($ss.StartMWh) { $SessionState.StartMWh = [double]$ss.StartMWh }
             if ($null -ne $ss.IsActive) { $SessionState.IsActive = [bool]$ss.IsActive }
@@ -69,6 +73,7 @@ if (Test-Path $SettingsFile) {
             if ($ss.LastUsedWh) { $SessionState.LastUsedWh = [double]$ss.LastUsedWh }
             if ($ss.LastAvgWatts) { $SessionState.LastAvgWatts = [double]$ss.LastAvgWatts }
             if ($null -ne $ss.HasLastSession) { $SessionState.HasLastSession = [bool]$ss.HasLastSession }
+            if ($ss.LastDisconnectTime) { $SessionState.LastDisconnectTime = [string]$ss.LastDisconnectTime }
         }
     } catch {}
 }
@@ -172,10 +177,10 @@ $Xaml = @"
                         <!-- Session Title & Icon -->
                         <StackPanel Orientation="Horizontal" Grid.Column="0" VerticalAlignment="Center">
                             <TextBlock Name="TxtSessionTitleIcon" Text="&#x1F50B;" FontSize="11" Margin="0,0,4,0"/>
-                            <TextBlock Name="TxtSessionTitle" Text="Battery Session" FontSize="11" FontWeight="SemiBold" Foreground="#38BDF8"/>
+                            <TextBlock Name="TxtSessionTitle" Text="Battery Session (Active)" FontSize="11" FontWeight="SemiBold" Foreground="#38BDF8"/>
                         </StackPanel>
 
-                        <!-- Running Timer (HH:MM:SS) -->
+                        <!-- Running Timer (HH:MM:SS) - Active Awake Time -->
                         <StackPanel Orientation="Horizontal" Grid.Column="1" VerticalAlignment="Center">
                             <TextBlock Text="&#x23F1;" FontSize="10" Foreground="#94A3B8" Margin="0,0,3,0"/>
                             <TextBlock Name="TxtSessionTimer" Text="00:00:00" FontSize="11.5" FontWeight="SemiBold" Foreground="#F8FAFC" FontFamily="Consolas, Segoe UI"/>
@@ -285,7 +290,6 @@ function Set-CompactMode([bool]$isCompact) {
     $Settings.Compact = $isCompact
     $vis = if ($isCompact) { [System.Windows.Visibility]::Collapsed } else { [System.Windows.Visibility]::Visible }
     
-    # In compact mode, keep Wattage and CPU Temp, hide battery percent, time remaining & session card
     $Sep1.Visibility = [System.Windows.Visibility]::Collapsed
     $TxtBatteryIcon.Visibility = [System.Windows.Visibility]::Collapsed
     $TxtPercent.Visibility = [System.Windows.Visibility]::Collapsed
@@ -351,8 +355,7 @@ $ContextMenu.Items.Add($MenuShowCard) | Out-Null
 $MenuResetSession = New-Object System.Windows.Controls.MenuItem
 $MenuResetSession.Header = "Reset Session Counter Now"
 $MenuResetSession.Add_Click({
-    Start-NewBatterySession
-    Save-Settings
+    Trigger-ManualReset
 })
 $ContextMenu.Items.Add($MenuResetSession) | Out-Null
 
@@ -463,6 +466,13 @@ $TrayMenuCard.Add_Click({
 })
 $TrayContextMenu.Items.Add($TrayMenuCard) | Out-Null
 
+$TrayMenuResetCounter = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayMenuResetCounter.Text = "Reset Session Counter"
+$TrayMenuResetCounter.Add_Click({
+    Trigger-ManualReset
+})
+$TrayContextMenu.Items.Add($TrayMenuResetCounter) | Out-Null
+
 $TrayMenuReset = New-Object System.Windows.Forms.ToolStripMenuItem
 $TrayMenuReset.Text = "Reset to Top Right"
 $TrayMenuReset.Add_Click({
@@ -498,6 +508,9 @@ $NotifyIcon.Add_MouseClick({
 
 function Exit-Application {
     $script:IsShuttingDown = $true
+    try {
+        [Microsoft.Win32.SystemEvents]::remove_PowerModeChanged($script:PowerModeHandler)
+    } catch {}
     Save-Settings
     $Timer.Stop()
     $NotifyIcon.Visible = $false
@@ -545,85 +558,150 @@ try {
     }
 } catch {}
 
-# Start new battery session helper
-function Start-NewBatterySession {
-    $script:SessionState.IsActive = $true
-    $script:SessionState.StartTime = [DateTime]::Now.ToString("o")
-    
-    # Read current state for accurate start numbers
+# Helper: Query latest AC disconnect event from Windows Kernel-Power
+function Get-LatestDisconnectEvent {
     try {
-        $searcher = New-Object System.Management.ManagementObjectSearcher("root\wmi", "SELECT RemainingCapacity FROM BatteryStatus")
-        $b = $searcher.Get() | Select-Object -First 1
-        if ($b) {
-            $rem = [double]$b["RemainingCapacity"]
-            $script:SessionState.StartMWh = $rem
-            $pct = [System.Windows.Forms.SystemInformation]::PowerStatus.BatteryLifePercent
-            if ($pct -gt 0) {
-                $script:SessionState.StartPercent = [int]($pct * 100)
-            } else {
-                $script:SessionState.StartPercent = [int](($rem / $script:FullCapacity) * 100)
-            }
-        }
-    } catch {}
-    Save-Settings
-}
-
-# Inspect if there was a recent AC disconnect event if starting fresh on battery
-function Initialize-BatterySessionIfUntracked([double]$currentMWh, [int]$currentPercent) {
-    if ($script:SessionState.IsActive -and $script:SessionState.StartTime) {
-        # Already tracked from persistent settings.json
-        return
-    }
-
-    # Try to find recent disconnect from Kernel-Power Event 105
-    $foundEvent = $false
-    try {
-        $events = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Kernel-Power'} -MaxEvents 20 -ErrorAction SilentlyContinue
-        foreach ($evt in $events) {
-            if ($evt.Id -eq 105 -and $evt.Properties.Count -ge 2) {
-                $acOnline = [bool]$evt.Properties[0].Value
+        $events = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Kernel-Power'} -MaxEvents 25 -ErrorAction SilentlyContinue
+        foreach ($e in $events) {
+            if ($e.Id -eq 105 -and $e.Properties.Count -ge 2) {
+                $acOnline = [bool]$e.Properties[0].Value
                 if (-not $acOnline) {
-                    # This was an AC disconnect event
-                    $disconnectTime = $evt.TimeCreated
-                    $diffHours = ([DateTime]::Now - $disconnectTime).TotalHours
-                    if ($diffHours -lt 24) {
-                        $script:SessionState.IsActive = $true
-                        $script:SessionState.StartTime = $disconnectTime.ToString("o")
-                        $initMWh = [double]$evt.Properties[1].Value
-                        $script:SessionState.StartMWh = if ($initMWh -gt 0) { $initMWh } else { $currentMWh }
-                        $fullCap = if ($evt.Properties.Count -ge 3 -and $evt.Properties[2].Value -gt 0) { [double]$evt.Properties[2].Value } else { $script:FullCapacity }
-                        $script:SessionState.StartPercent = [math]::Round(($script:SessionState.StartMWh / $fullCap) * 100)
-                        $foundEvent = $true
-                        break
-                    }
+                    # Most recent disconnect event
+                    return $e
                 }
             }
         }
     } catch {}
+    return $null
+}
 
-    if (-not $foundEvent) {
-        # Fallback to now
-        $script:SessionState.IsActive = $true
+# Helper: Start clean new battery session (Reset)
+function Start-NewBatterySession([double]$mwh, [int]$pct, [DateTime]$eventTime) {
+    $script:SessionState.IsActive = $true
+    $script:SessionState.ActiveSeconds = 0.0
+    
+    if ($eventTime) {
+        $script:SessionState.StartTime = $eventTime.ToString("o")
+        $script:SessionState.LastDisconnectTime = $eventTime.ToString("o")
+    } else {
         $script:SessionState.StartTime = [DateTime]::Now.ToString("o")
-        $script:SessionState.StartPercent = $currentPercent
-        $script:SessionState.StartMWh = $currentMWh
+        $script:SessionState.LastDisconnectTime = [DateTime]::Now.ToString("o")
     }
+    
+    $script:SessionState.StartMWh = $mwh
+    $script:SessionState.StartPercent = $pct
+    $script:SessionState.LastDuration = "00:00:00"
+    $script:LastTickTime = [DateTime]::UtcNow
     Save-Settings
 }
 
-$script:PreviousPowerOnline = $null
+# Helper: End battery session when AC is plugged in
+function End-BatterySession([double]$mwh, [int]$pct) {
+    if ($script:SessionState.IsActive) {
+        $totalSec = [int][math]::Floor($script:SessionState.ActiveSeconds)
+        $hrs = [math]::Floor($totalSec / 3600)
+        $mins = [math]::Floor(($totalSec % 3600) / 60)
+        $secs = $totalSec % 60
+        $script:SessionState.LastDuration = [string]::Format("{0:D2}:{1:D2}:{2:D2}", $hrs, $mins, $secs)
+        
+        $drop = $script:SessionState.StartPercent - $pct
+        $script:SessionState.LastUsedPercent = if ($drop -gt 0) { $drop } else { 0 }
+        
+        $mwhUsed = $script:SessionState.StartMWh - $mwh
+        $whUsed = if ($mwhUsed -gt 0) { [math]::Round($mwhUsed / 1000, 1) } else { 0.0 }
+        $script:SessionState.LastUsedWh = $whUsed
+        
+        $hoursActive = $script:SessionState.ActiveSeconds / 3600.0
+        $script:SessionState.LastAvgWatts = if ($hoursActive -gt 0.008) { [math]::Round($whUsed / $hoursActive, 1) } else { 0.0 }
+        
+        $script:SessionState.HasLastSession = $true
+        $script:SessionState.IsActive = $false
+        Save-Settings
+    }
+}
 
-# Realtime update function
+# Manual Reset trigger from menu
+function Trigger-ManualReset {
+    try {
+        $b = (New-Object System.Management.ManagementObjectSearcher("root\wmi", "SELECT RemainingCapacity FROM BatteryStatus")).Get() | Select-Object -First 1
+        $rem = if ($b) { [double]$b["RemainingCapacity"] } else { $script:FullCapacity }
+        $pct = [int]([System.Windows.Forms.SystemInformation]::PowerStatus.BatteryLifePercent * 100)
+        Start-NewBatterySession $rem $pct ([DateTime]::Now)
+    } catch {}
+}
+
+# State tracking variables
+$script:LastKnownPowerOnline = $null
+$script:LastTickTime = [DateTime]::UtcNow
+
+# OS Power Broadcast Listener: detects sleep/resume and AC plug/unplug instantly
+$script:PowerModeHandler = {
+    param($s, $e)
+    try {
+        if ($e.Mode -eq [Microsoft.Win32.PowerModes]::Suspend) {
+            $script:LastTickTime = [DateTime]::UtcNow
+        } elseif ($e.Mode -eq [Microsoft.Win32.PowerModes]::Resume) {
+            # Waking from sleep: reset tick timer so sleeping hours are NEVER added!
+            $script:LastTickTime = [DateTime]::UtcNow
+            Update-BatteryStats
+        } elseif ($e.Mode -eq [Microsoft.Win32.PowerModes]::StatusChange) {
+            # Power status changed (AC plugged / unplugged)
+            Update-BatteryStats
+        }
+    } catch {}
+}
+[Microsoft.Win32.SystemEvents]::add_PowerModeChanged($script:PowerModeHandler)
+
+# Realtime update function (called every 1 second)
 function Update-BatteryStats {
     try {
-        # 1. Battery Query
+        $nowUtc = [DateTime]::UtcNow
+        
+        # ----------------- Awake Time Accumulation (No Sleep Counting!) -----------------
+        $delta = 0.0
+        if ($null -ne $script:LastTickTime) {
+            $delta = ($nowUtc - $script:LastTickTime).TotalSeconds
+        }
+        $script:LastTickTime = $nowUtc
+
+        # If delta is >= 2.5 seconds on a 1-second timer, the laptop was asleep / in Modern Standby!
+        $wasSleeping = ($delta -ge 2.5)
+
+        # 1. Check Power Status
+        $powerStatus = [System.Windows.Forms.SystemInformation]::PowerStatus
+        $isAcOnline = ($powerStatus.PowerLineStatus -eq [System.Windows.Forms.PowerLineStatus]::Online)
+
+        # 2. Battery WMI Query
         $batterySearcher = New-Object System.Management.ManagementObjectSearcher("root\wmi", "SELECT DischargeRate, ChargeRate, RemainingCapacity, Charging, Discharging, PowerOnline FROM BatteryStatus")
         $b = $batterySearcher.Get() | Select-Object -First 1
+        if (-not $b) { return }
 
-        # 2. CPU Temperature Query
+        $dischargeRate = [double]$b["DischargeRate"]
+        $chargeRate = [double]$b["ChargeRate"]
+        $remaining = [double]$b["RemainingCapacity"]
+        $charging = [bool]$b["Charging"]
+        $discharging = [bool]$b["Discharging"]
+        $wmiPowerOnline = [bool]$b["PowerOnline"]
+
+        # Final Power State (True = AC connected, False = Discharging on Battery)
+        $currentPowerOnline = $isAcOnline -or $wmiPowerOnline
+
+        # Battery percentage
+        $pctFloat = $powerStatus.BatteryLifePercent
+        $percentInt = if ($pctFloat -gt 0) { [int]($pctFloat * 100) } else { [int](($remaining / $script:FullCapacity) * 100) }
+        $TxtPercent.Text = "$percentInt%"
+
+        if ($percentInt -le 20) {
+            $TxtBatteryIcon.Text = $IconBatLow
+            $TxtBatteryIcon.Foreground = $BrushRed
+        } else {
+            $TxtBatteryIcon.Text = $IconBat
+            $TxtBatteryIcon.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E2E8F0")
+        }
+
+        # 3. CPU Temperature Query
         $tempSearcher = New-Object System.Management.ManagementObjectSearcher("root\cimv2", "SELECT HighPrecisionTemperature, Temperature FROM Win32_PerfFormattedData_Counters_ThermalZoneInformation")
         $tObj = $tempSearcher.Get() | Select-Object -First 1
-
         $celsius = 0
         if ($tObj) {
             $rawK = if ($tObj["HighPrecisionTemperature"]) { [double]$tObj["HighPrecisionTemperature"] / 10.0 } else { [double]$tObj["Temperature"] }
@@ -644,67 +722,86 @@ function Update-BatteryStats {
             }
         }
 
-        if (-not $b) { return }
-
-        $dischargeRate = [double]$b["DischargeRate"]
-        $chargeRate = [double]$b["ChargeRate"]
-        $remaining = [double]$b["RemainingCapacity"]
-        $charging = [bool]$b["Charging"]
-        $discharging = [bool]$b["Discharging"]
-        $powerOnline = [bool]$b["PowerOnline"]
-
-        # Battery percentage
-        $pct = [System.Windows.Forms.SystemInformation]::PowerStatus.BatteryLifePercent
-        if ($pct -gt 0) {
-            $percentInt = [int]($pct * 100)
+        # ----------------- Guaranteed AC Disconnect Detection & Lifecycle -----------------
+        if ($null -ne $script:LastKnownPowerOnline) {
+            if ($script:LastKnownPowerOnline -and (-not $currentPowerOnline)) {
+                # Live transition: AC -> Battery (Unplugged right now!)
+                Start-NewBatterySession $remaining $percentInt ([DateTime]::Now)
+            } elseif ((-not $script:LastKnownPowerOnline) -and $currentPowerOnline) {
+                # Live transition: Battery -> AC (Plugged in right now!)
+                End-BatterySession $remaining $percentInt
+            }
         } else {
-            $percentInt = [int](($remaining / $script:FullCapacity) * 100)
-        }
-        $TxtPercent.Text = "$percentInt%"
-
-        if ($percentInt -le 20) {
-            $TxtBatteryIcon.Text = $IconBatLow
-            $TxtBatteryIcon.Foreground = $BrushRed
-        } else {
-            $TxtBatteryIcon.Text = $IconBat
-            $TxtBatteryIcon.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E2E8F0")
-        }
-
-        # ----------------- Lifecycle & Transition Detection -----------------
-        if ($null -ne $script:PreviousPowerOnline) {
-            if ($script:PreviousPowerOnline -and (-not $powerOnline)) {
-                # TRANSITION: AC -> Battery (Unplugged!)
-                # Automatically reset and activate new session
-                Start-NewBatterySession
-            } elseif ((-not $script:PreviousPowerOnline) -and $powerOnline) {
-                # TRANSITION: Battery -> AC (Plugged in!)
-                # Stop timer and freeze final session summary
-                if ($script:SessionState.IsActive -and $script:SessionState.StartTime) {
-                    $startDt = [DateTime]::Parse($script:SessionState.StartTime)
-                    $elapsedSpan = [DateTime]::Now - $startDt
-                    $script:SessionState.LastDuration = [string]::Format("{0:D2}:{1:D2}:{2:D2}", [int]$elapsedSpan.TotalHours, $elapsedSpan.Minutes, $elapsedSpan.Seconds)
-                    $drop = $script:SessionState.StartPercent - $percentInt
-                    $script:SessionState.LastUsedPercent = if ($drop -gt 0) { $drop } else { 0 }
-                    $mwhUsed = $script:SessionState.StartMWh - $remaining
-                    $whUsed = if ($mwhUsed -gt 0) { [math]::Round($mwhUsed / 1000, 1) } else { 0.0 }
-                    $script:SessionState.LastUsedWh = $whUsed
-                    $script:SessionState.LastAvgWatts = if ($elapsedSpan.TotalHours -gt 0.01) { [math]::Round($whUsed / $elapsedSpan.TotalHours, 1) } else { 0.0 }
-                    $script:SessionState.HasLastSession = $true
-                    $script:SessionState.IsActive = $false
-                    Save-Settings
+            # First tick after startup:
+            if (-not $currentPowerOnline) {
+                # Laptop is currently on battery! Check if a disconnect event occurred
+                $latestEvent = Get-LatestDisconnectEvent
+                if ($latestEvent) {
+                    $evtTime = $latestEvent.TimeCreated
+                    $evtMWh = [double]$latestEvent.Properties[1].Value
+                    $evtFull = [double]$latestEvent.Properties[2].Value
+                    $evtPct = if ($evtFull -gt 0) { [math]::Round(($evtMWh / $evtFull) * 100) } else { $percentInt }
+                    
+                    # If no active session, or if this disconnect event is NEWER than our recorded session start time:
+                    $needsNewSession = $true
+                    if ($script:SessionState.IsActive -and $script:SessionState.StartTime) {
+                        try {
+                            $savedStart = [DateTime]::Parse($script:SessionState.StartTime)
+                            # If disconnect event is within 30 seconds of saved start, it's the same session!
+                            if ([math]::Abs(($evtTime - $savedStart).TotalSeconds) -lt 45) {
+                                $needsNewSession = $false
+                            }
+                        } catch {}
+                    }
+                    
+                    if ($needsNewSession) {
+                        Start-NewBatterySession (if ($evtMWh -gt 0) { $evtMWh } else { $remaining }) $evtPct $evtTime
+                    }
+                } elseif (-not $script:SessionState.IsActive) {
+                    Start-NewBatterySession $remaining $percentInt ([DateTime]::Now)
                 }
             }
-        } else {
-            # First tick initialization
-            if (-not $powerOnline) {
-                Initialize-BatterySessionIfUntracked $remaining $percentInt
+        }
+        $script:LastKnownPowerOnline = $currentPowerOnline
+
+        # Check disconnect events on wake: in case user unplugged while laptop was ASLEEP!
+        if ($wasSleeping -and (-not $currentPowerOnline)) {
+            $latestEvent = Get-LatestDisconnectEvent
+            if ($latestEvent) {
+                $evtTime = $latestEvent.TimeCreated
+                if ($script:SessionState.StartTime) {
+                    try {
+                        $currentStart = [DateTime]::Parse($script:SessionState.StartTime)
+                        if ($evtTime -gt $currentStart.AddSeconds(10)) {
+                            # Unplugged while sleeping! Start fresh session from that disconnect!
+                            $evtMWh = [double]$latestEvent.Properties[1].Value
+                            $evtFull = [double]$latestEvent.Properties[2].Value
+                            $evtPct = if ($evtFull -gt 0) { [math]::Round(($evtMWh / $evtFull) * 100) } else { $percentInt }
+                            Start-NewBatterySession (if ($evtMWh -gt 0) { $evtMWh } else { $remaining }) $evtPct $evtTime
+                        }
+                    } catch {}
+                }
             }
         }
-        $script:PreviousPowerOnline = $powerOnline
 
-        # ----------------- Top Row Status Rendering -----------------
+        # ----------------- Accumulate Active Seconds (AWAKE ONLY) -----------------
+        if ($script:SessionState.IsActive -and (-not $currentPowerOnline)) {
+            if (-not $wasSleeping) {
+                # System was awake during this tick
+                if ($delta -gt 0 -and $delta -lt 2.5) {
+                    $script:SessionState.ActiveSeconds += $delta
+                } else {
+                    $script:SessionState.ActiveSeconds += 1.0
+                }
+            } else {
+                # System just resumed from sleep: only add 1 second for the awake tick
+                $script:SessionState.ActiveSeconds += 1.0
+            }
+        }
+
+        # ----------------- Top Row Live Status Rendering -----------------
         $statusSummary = ""
-        if ($powerOnline -or $charging) {
+        if ($currentPowerOnline) {
             # Plugged in to AC
             if ($chargeRate -gt 0) {
                 $chargeWatts = [math]::Round($chargeRate / 1000, 1)
@@ -767,56 +864,59 @@ function Update-BatteryStats {
 
         # ----------------- Session Tracker Card Rendering -----------------
         $elapsedDisplay = "00:00:00"
-        if (-not $powerOnline) {
+        if (-not $currentPowerOnline) {
             # ACTIVE ON BATTERY
             if ($Settings.ShowSessionCard -and (-not $Settings.Compact)) {
                 $CardSession.Visibility = [System.Windows.Visibility]::Visible
             }
 
             $TxtSessionTitleIcon.Text = $IconBat
-            $TxtSessionTitle.Text = "Battery Session"
+            $TxtSessionTitle.Text = "Battery Session (Active)"
             $TxtSessionTitle.Foreground = $BrushSky
 
-            if ($script:SessionState.StartTime) {
-                $startDt = [DateTime]::Parse($script:SessionState.StartTime)
-                $span = [DateTime]::Now - $startDt
-                $elapsedDisplay = [string]::Format("{0:D2}:{1:D2}:{2:D2}", [int]$span.TotalHours, $span.Minutes, $span.Seconds)
-                $TxtSessionTimer.Text = $elapsedDisplay
+            # Format Active Seconds (HH:MM:SS)
+            $totalSec = [int][math]::Floor($script:SessionState.ActiveSeconds)
+            $hrs = [math]::Floor($totalSec / 3600)
+            $mins = [math]::Floor(($totalSec % 3600) / 60)
+            $secs = $totalSec % 60
+            $elapsedDisplay = [string]::Format("{0:D2}:{1:D2}:{2:D2}", $hrs, $mins, $secs)
+            $TxtSessionTimer.Text = $elapsedDisplay
 
-                $startTimeStr = $startDt.ToString("h:mm tt")
-                $TxtSessionStart.Text = "Start: $($script:SessionState.StartPercent)% ($startTimeStr)"
+            # Start info
+            $startDisplay = if ($script:SessionState.StartTime) {
+                try { [DateTime]::Parse($script:SessionState.StartTime).ToString("h:mm tt") } catch { "" }
+            } else { "" }
+            $TxtSessionStart.Text = "Start: $($script:SessionState.StartPercent)% $(if ($startDisplay) { "($startDisplay)" })"
 
-                # Power Consumed (%)
-                $pctDropped = $script:SessionState.StartPercent - $percentInt
-                if ($pctDropped -lt 0) { $pctDropped = 0 }
-                $TxtSessionUsed.Text = "Used: $pctDropped%"
+            # Power Consumed (%)
+            $pctDropped = $script:SessionState.StartPercent - $percentInt
+            if ($pctDropped -lt 0) { $pctDropped = 0 }
+            $TxtSessionUsed.Text = "Used: $pctDropped%"
 
-                # Energy Consumed (Wh) & Avg Watts
-                $mwhUsed = $script:SessionState.StartMWh - $remaining
-                $whUsed = if ($mwhUsed -gt 0) { [math]::Round($mwhUsed / 1000, 1) } else { 0.0 }
-                $avgWatts = if ($span.TotalHours -gt 0.01) { [math]::Round($whUsed / $span.TotalHours, 1) } else { [math]::Round($dischargeRate / 1000, 1) }
-                $TxtSessionEnergy.Text = "-$whUsed Wh (Avg $avgWatts W)"
-            }
+            # Energy Consumed (Wh) & Avg Watts (based on ACTIVE awake hours only!)
+            $mwhUsed = $script:SessionState.StartMWh - $remaining
+            $whUsed = if ($mwhUsed -gt 0) { [math]::Round($mwhUsed / 1000, 1) } else { 0.0 }
+            $hoursActive = $script:SessionState.ActiveSeconds / 3600.0
+            $avgWatts = if ($hoursActive -gt 0.008) { [math]::Round($whUsed / $hoursActive, 1) } else { [math]::Round($dischargeRate / 1000, 1) }
+            $TxtSessionEnergy.Text = "-$whUsed Wh (Avg $avgWatts W)"
         } else {
             # ON AC POWER (PLUGGED IN)
             if ($script:SessionState.HasLastSession -and $Settings.ShowSessionCard -and (-not $Settings.Compact)) {
-                # Display final session summary stats
                 $CardSession.Visibility = [System.Windows.Visibility]::Visible
                 $TxtSessionTitleIcon.Text = $IconPlug
-                $TxtSessionTitle.Text = "Last Battery Session"
+                $TxtSessionTitle.Text = "Last Battery Session (Active)"
                 $TxtSessionTitle.Foreground = $BrushGreenLight
                 $TxtSessionTimer.Text = $script:SessionState.LastDuration
                 $TxtSessionStart.Text = "Start: $($script:SessionState.StartPercent)%"
                 $TxtSessionUsed.Text = "Used: $($script:SessionState.LastUsedPercent)%"
                 $TxtSessionEnergy.Text = "-$($script:SessionState.LastUsedWh) Wh (Avg $($script:SessionState.LastAvgWatts) W)"
             } elseif (-not $script:SessionState.HasLastSession) {
-                # Hide tracker when on AC without prior session
                 $CardSession.Visibility = [System.Windows.Visibility]::Collapsed
             }
         }
 
         # ----------------- Update Tray Tooltip (max 63 chars) -----------------
-        $trayTip = if (-not $powerOnline) {
+        $trayTip = if (-not $currentPowerOnline) {
             "Bat: $percentInt% ($statusSummary) | $elapsedDisplay | CPU: $celsius`°C"
         } else {
             "AC Power ($percentInt%) | CPU: $celsius`°C"
@@ -834,7 +934,7 @@ Set-CompactMode $Settings.Compact
 Set-SessionCardVisibility $Settings.ShowSessionCard
 Update-BatteryStats
 
-# Timer for real-time polling (1 second interval for smooth timer countdown)
+# Timer for real-time polling (1 second interval)
 $Timer = New-Object System.Windows.Threading.DispatcherTimer
 $Timer.Interval = [TimeSpan]::FromSeconds($Settings.Interval)
 $Timer.Add_Tick({ Update-BatteryStats })
