@@ -23,8 +23,17 @@ Designed specifically to be sleek, distraction-free, and consume virtually zero 
   - **AC Final Session Summary:** When plugged back into AC, displays the complete session summary until your next battery run.
   - **Persistent Session State:** Remembers elapsed time and initial percentages across overlay minimizations, toggles, and app restarts during the same battery run.
   - **Collapsible:** Toggle the card open or closed via the `▾` button or right-click menu.
+- **🔋 Battery Percentage & Capacity Telemetry:**
+  - Displays remaining battery percentage (`%`) or switchable to Watt-hours (`Wh`).
+  - **Clickable:** Left-click the battery percentage slot to toggle between `%` and remaining `Wh` directly.
+- **📊 Dedicated Capacity Slot (Toggleable):**
+  - Displays live Watt-hours telemetry (e.g. `18.9 Wh`, `18.9 / 31.8 Wh`, or `Cap 31.8 Wh`).
+  - **Toggle on/off:** Easily show or hide the slot via right-click context menu (`Show Capacity Slot (Wh)`) or tray icon menu.
+  - **Cycle Formats:** Left-click on the Capacity slot to cycle through:
+    1. *Remaining Wh* (`18.9 Wh`)
+    2. *Remaining / Full Capacity* (`18.9 / 31.8 Wh`)
+    3. *Full Charge Capacity* (`Cap 31.8 Wh`)
 - **🌡️ Live CPU Temperature:** Real-time thermal sensor reading (`°C`) via Windows ACPI Thermal Zone, with dynamic thermal color alerts.
-- **🔋 Battery Percentage & Health State:** Shows remaining capacity and shifts to low-battery indicators when needed.
 - **⏱️ Dynamic Time Remaining:** Constantly calculated based on your immediate real-time discharge rate.
 - **🪟 Sleek Floating Pill Overlay:**
   - Modern dark acrylic UI with subtle drop shadow and rounded corners.
@@ -66,11 +75,14 @@ This creates a **Battery Overlay** shortcut directly on your Desktop with native
 | :--- | :--- |
 | **Left Click + Drag** | Move overlay anywhere on screen (auto-saves position). |
 | **Double Click** | Toggle between **Full View** (with Session Card) and **Compact View** (`⚡ 8.4 W  •  🌡️ 55°C`). |
+| **Click Capacity Slot** | Cycle capacity format: Remaining (`18.9 Wh`) → Detailed (`18.9 / 31.8 Wh`) → Full (`Cap 31.8 Wh`). |
+| **Click Battery % Slot** | Toggle percentage display between `%` and `Wh`. |
 | **Click `▾` / `▴`** | Collapse or expand the Battery Session Counter Card. |
-| **Right Click (Overlay)** | Open settings menu (Compact Mode, Show/Hide Session Card, Reset Counter, Always On Top, Opacity, Refresh Rate, Reset Position, Exit). |
+| **Right Click (Overlay)** | Open settings menu (Toggle Capacity Slot, Capacity Format, Compact Mode, Show/Hide Session Card, Reset Counter, Always On Top, Opacity, Reset Position, Exit). |
 | **Click `✕`** | Minimize / hide overlay to the Hidden Icons tray. |
 | **Tray Icon (Left Click)** | Toggle overlay visibility (Show / Hide). |
-| **Tray Icon (Right Click)** | Access quick controls, toggle session card, or **Exit Completely**. |
+| **Tray Icon (Right Click)** | Access quick controls, toggle capacity slot, toggle session card, or **Exit Completely**. |
+| **Re-launching App** | If already running in tray or background, re-launching immediately brings the window to the front. |
 
 ---
 

@@ -9,11 +9,34 @@ Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName System.Management
 
 # Single-instance enforcement: prevent competing duplicate instances
+$script:MutexName = "Local\BatteryOverlay_SingleInstance_Mutex"
+$script:ShowEventName = "Local\BatteryOverlay_ShowWindow_Event"
 $script:CreatedNewMutex = $false
-$script:AppMutex = New-Object System.Threading.Mutex($true, "Local\BatteryOverlay_SingleInstance_Mutex", [ref]$script:CreatedNewMutex)
+$script:AppMutex = $null
+
+try {
+    $script:AppMutex = New-Object System.Threading.Mutex($true, $script:MutexName, [ref]$script:CreatedNewMutex)
+} catch [System.Threading.AbandonedMutexException] {
+    $script:CreatedNewMutex = $true
+} catch {
+    $script:CreatedNewMutex = $true
+}
+
 if (-not $script:CreatedNewMutex) {
-    # Another instance is already running
+    # Another instance is already running!
+    # Signal it to restore and bring its overlay window to the front on screen!
+    try {
+        $showEv = [System.Threading.EventWaitHandle]::OpenExisting($script:ShowEventName)
+        $showEv.Set() | Out-Null
+    } catch {}
     exit
+}
+
+# Main instance: create show signal event
+try {
+    $script:ShowEvent = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::AutoReset, $script:ShowEventName)
+} catch {
+    $script:ShowEvent = $null
 }
 
 # Helper unicode characters
@@ -39,6 +62,8 @@ $Settings = @{
     Interval = 1
     Topmost = $true
     ShowSessionCard = $true
+    ShowCapacitySlot = $true
+    CapacityMode = "Remaining"     # "Remaining", "Detailed", "Full"
 }
 
 # Session State - Tracks ACTIVE awake time only (pauses in sleep)
@@ -67,6 +92,8 @@ if (Test-Path $SettingsFile) {
         if ($Loaded.Interval) { $Settings.Interval = [int]$Loaded.Interval }
         if ($null -ne $Loaded.Topmost) { $Settings.Topmost = [bool]$Loaded.Topmost }
         if ($null -ne $Loaded.ShowSessionCard) { $Settings.ShowSessionCard = [bool]$Loaded.ShowSessionCard }
+        if ($null -ne $Loaded.ShowCapacitySlot) { $Settings.ShowCapacitySlot = [bool]$Loaded.ShowCapacitySlot }
+        if ($Loaded.CapacityMode) { $Settings.CapacityMode = [string]$Loaded.CapacityMode }
         
         # Load saved session
         if ($Loaded.SessionState) {
@@ -127,9 +154,18 @@ $Xaml = @"
                 <!-- Separator 1 -->
                 <Rectangle Name="Sep1" Width="1" Height="14" Fill="#33FFFFFF" Margin="9,0,9,0" VerticalAlignment="Center"/>
 
-                <!-- Battery Percentage -->
-                <TextBlock Name="TxtBatteryIcon" Text="&#x1F50B;" FontSize="11" VerticalAlignment="Center" Margin="0,0,3,0" Cursor="SizeAll"/>
-                <TextBlock Name="TxtPercent" Text="--%" FontSize="12.5" FontWeight="Medium" Foreground="#E2E8F0" VerticalAlignment="Center" Cursor="SizeAll"/>
+                <!-- Battery Percentage (Clickable to toggle % / Wh) -->
+                <TextBlock Name="TxtBatteryIcon" Text="&#x1F50B;" FontSize="11" VerticalAlignment="Center" Margin="0,0,3,0" Cursor="Hand" ToolTip="Battery Percentage (Click to toggle % / Wh)"/>
+                <TextBlock Name="TxtPercent" Text="--%" FontSize="12.5" FontWeight="Medium" Foreground="#E2E8F0" VerticalAlignment="Center" Cursor="Hand" ToolTip="Battery Percentage (Click to toggle % / Wh)"/>
+
+                <!-- Separator Cap -->
+                <Rectangle Name="SepCap" Width="1" Height="14" Fill="#33FFFFFF" Margin="9,0,9,0" VerticalAlignment="Center"/>
+
+                <!-- Capacity Slot (Wh / Detailed / Full) -->
+                <StackPanel Name="SlotCapacity" Orientation="Horizontal" VerticalAlignment="Center" Cursor="Hand" ToolTip="Battery Capacity (Click: switch format | Right-click: toggle slot)">
+                    <TextBlock Name="TxtCapacityIcon" Text="&#x1F4CA;" FontSize="11" Foreground="#38BDF8" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                    <TextBlock Name="TxtCapacity" Text="-- Wh" FontSize="12.5" FontWeight="Medium" Foreground="#E2E8F0" VerticalAlignment="Center"/>
+                </StackPanel>
 
                 <!-- Separator 2 -->
                 <Rectangle Name="Sep2" Width="1" Height="14" Fill="#33FFFFFF" Margin="9,0,9,0" VerticalAlignment="Center"/>
@@ -228,6 +264,10 @@ $TxtWattage          = $Window.FindName("TxtWattage")
 $Sep1                = $Window.FindName("Sep1")
 $TxtBatteryIcon      = $Window.FindName("TxtBatteryIcon")
 $TxtPercent          = $Window.FindName("TxtPercent")
+$SepCap              = $Window.FindName("SepCap")
+$SlotCapacity        = $Window.FindName("SlotCapacity")
+$TxtCapacityIcon     = $Window.FindName("TxtCapacityIcon")
+$TxtCapacity         = $Window.FindName("TxtCapacity")
 $Sep2                = $Window.FindName("Sep2")
 $TxtCpuIcon          = $Window.FindName("TxtCpuIcon")
 $TxtCpuTemp          = $Window.FindName("TxtCpuTemp")
@@ -285,6 +325,8 @@ function Save-Settings {
             Interval = [int]$Timer.Interval.TotalSeconds
             Topmost = [bool]$Window.Topmost
             ShowSessionCard = [bool]$Settings.ShowSessionCard
+            ShowCapacitySlot = [bool]$Settings.ShowCapacitySlot
+            CapacityMode = [string]$Settings.CapacityMode
             SessionState = $SessionState
         }
         $data | ConvertTo-Json -Depth 4 | Set-Content -Path $SettingsFile -Force
@@ -309,6 +351,66 @@ function Set-SessionCardVisibility([bool]$visible) {
     }
 }
 
+# Toggle Capacity Slot Visibility
+function Set-CapacitySlotVisibility([bool]$visible) {
+    $Settings.ShowCapacitySlot = $visible
+    $vis = if ($visible -and (-not $Settings.Compact)) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
+    $SepCap.Visibility = $vis
+    $SlotCapacity.Visibility = $vis
+    if ($MenuShowCapacity) { $MenuShowCapacity.IsChecked = $visible }
+    if ($TrayMenuShowCapacity) { $TrayMenuShowCapacity.Checked = $visible }
+    Save-Settings
+}
+
+# Cycle Capacity Format (Remaining Wh -> Detailed Remaining/Full -> Full Capacity)
+function Cycle-CapacityMode {
+    switch ($Settings.CapacityMode) {
+        "Remaining" { $Settings.CapacityMode = "Detailed" }
+        "Detailed"  { $Settings.CapacityMode = "Full" }
+        default     { $Settings.CapacityMode = "Remaining" }
+    }
+    Update-CapacityText
+    Update-CapacityMenuChecks
+    Save-Settings
+}
+
+function Set-CapacityMode([string]$mode) {
+    $Settings.CapacityMode = $mode
+    Update-CapacityText
+    Update-CapacityMenuChecks
+    Save-Settings
+}
+
+function Update-CapacityMenuChecks {
+    if ($MenuCapRem)  { $MenuCapRem.IsChecked  = ($Settings.CapacityMode -eq "Remaining") }
+    if ($MenuCapDet)  { $MenuCapDet.IsChecked  = ($Settings.CapacityMode -eq "Detailed") }
+    if ($MenuCapFull) { $MenuCapFull.IsChecked = ($Settings.CapacityMode -eq "Full") }
+    if ($TrayCapRem)  { $TrayCapRem.Checked  = ($Settings.CapacityMode -eq "Remaining") }
+    if ($TrayCapDet)  { $TrayCapDet.Checked  = ($Settings.CapacityMode -eq "Detailed") }
+    if ($TrayCapFull) { $TrayCapFull.Checked = ($Settings.CapacityMode -eq "Full") }
+}
+
+function Update-CapacityText {
+    $remWh = [math]::Round($script:CurrentRemainingMWh / 1000.0, 1)
+    $fullWh = [math]::Round($script:FullCapacity / 1000.0, 1)
+    if ($remWh -le 0 -and $script:FullCapacity -gt 0) {
+        $remWh = [math]::Round(($script:FullCapacity * ($script:CurrentPercent / 100.0)) / 1000.0, 1)
+    }
+
+    switch ($Settings.CapacityMode) {
+        "Detailed" {
+            $TxtCapacity.Text = "$remWh / $fullWh Wh"
+        }
+        "Full" {
+            $TxtCapacity.Text = "Cap $fullWh Wh"
+        }
+        default {
+            $TxtCapacity.Text = "$remWh Wh"
+        }
+    }
+    $SlotCapacity.ToolTip = "Battery Capacity: $remWh Wh remaining of $fullWh Wh full charge`nLeft-click: cycle format`nRight-click: toggle slot"
+}
+
 # Toggle Compact Mode
 function Set-CompactMode([bool]$isCompact) {
     $Settings.Compact = $isCompact
@@ -317,6 +419,8 @@ function Set-CompactMode([bool]$isCompact) {
     $Sep1.Visibility = [System.Windows.Visibility]::Collapsed
     $TxtBatteryIcon.Visibility = [System.Windows.Visibility]::Collapsed
     $TxtPercent.Visibility = [System.Windows.Visibility]::Collapsed
+    $SepCap.Visibility = [System.Windows.Visibility]::Collapsed
+    $SlotCapacity.Visibility = [System.Windows.Visibility]::Collapsed
     $Sep3.Visibility = $vis
     $TxtTimeIcon.Visibility = $vis
     $TxtRemaining.Visibility = $vis
@@ -326,6 +430,7 @@ function Set-CompactMode([bool]$isCompact) {
         $Sep1.Visibility = [System.Windows.Visibility]::Visible
         $TxtBatteryIcon.Visibility = [System.Windows.Visibility]::Visible
         $TxtPercent.Visibility = [System.Windows.Visibility]::Visible
+        Set-CapacitySlotVisibility $Settings.ShowCapacitySlot
         Set-SessionCardVisibility $Settings.ShowSessionCard
     } else {
         $CardSession.Visibility = [System.Windows.Visibility]::Collapsed
@@ -374,6 +479,43 @@ $MenuShowCard.Add_Click({
     Save-Settings
 })
 $ContextMenu.Items.Add($MenuShowCard) | Out-Null
+
+# Menu Item: Show Capacity Slot (Wh)
+$MenuShowCapacity = New-Object System.Windows.Controls.MenuItem
+$MenuShowCapacity.Header = "Show Capacity Slot (Wh)"
+$MenuShowCapacity.IsCheckable = $true
+$MenuShowCapacity.IsChecked = $Settings.ShowCapacitySlot
+$MenuShowCapacity.Add_Click({
+    Set-CapacitySlotVisibility (-not $Settings.ShowCapacitySlot)
+})
+$ContextMenu.Items.Add($MenuShowCapacity) | Out-Null
+
+# Menu Item: Capacity Format submenu
+$MenuCapacityMode = New-Object System.Windows.Controls.MenuItem
+$MenuCapacityMode.Header = "Capacity Format"
+
+$MenuCapRem = New-Object System.Windows.Controls.MenuItem
+$MenuCapRem.Header = "Remaining Only (e.g. 18.9 Wh)"
+$MenuCapRem.IsCheckable = $true
+$MenuCapRem.IsChecked = ($Settings.CapacityMode -eq "Remaining")
+$MenuCapRem.Add_Click({ Set-CapacityMode "Remaining" })
+$MenuCapacityMode.Items.Add($MenuCapRem) | Out-Null
+
+$MenuCapDet = New-Object System.Windows.Controls.MenuItem
+$MenuCapDet.Header = "Remaining / Full (e.g. 18.9 / 31.8 Wh)"
+$MenuCapDet.IsCheckable = $true
+$MenuCapDet.IsChecked = ($Settings.CapacityMode -eq "Detailed")
+$MenuCapDet.Add_Click({ Set-CapacityMode "Detailed" })
+$MenuCapacityMode.Items.Add($MenuCapDet) | Out-Null
+
+$MenuCapFull = New-Object System.Windows.Controls.MenuItem
+$MenuCapFull.Header = "Full Capacity (e.g. Cap 31.8 Wh)"
+$MenuCapFull.IsCheckable = $true
+$MenuCapFull.IsChecked = ($Settings.CapacityMode -eq "Full")
+$MenuCapFull.Add_Click({ Set-CapacityMode "Full" })
+$MenuCapacityMode.Items.Add($MenuCapFull) | Out-Null
+
+$ContextMenu.Items.Add($MenuCapacityMode) | Out-Null
 
 # Menu Item: Reset Current Battery Session
 $MenuResetSession = New-Object System.Windows.Controls.MenuItem
@@ -490,6 +632,37 @@ $TrayMenuCard.Add_Click({
 })
 $TrayContextMenu.Items.Add($TrayMenuCard) | Out-Null
 
+$TrayMenuShowCapacity = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayMenuShowCapacity.Text = "Show Capacity Slot (Wh)"
+$TrayMenuShowCapacity.Checked = $Settings.ShowCapacitySlot
+$TrayMenuShowCapacity.Add_Click({
+    Set-CapacitySlotVisibility (-not $Settings.ShowCapacitySlot)
+})
+$TrayContextMenu.Items.Add($TrayMenuShowCapacity) | Out-Null
+
+$TrayMenuCapacityFormat = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayMenuCapacityFormat.Text = "Capacity Format"
+
+$TrayCapRem = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayCapRem.Text = "Remaining Only (Wh)"
+$TrayCapRem.Checked = ($Settings.CapacityMode -eq "Remaining")
+$TrayCapRem.Add_Click({ Set-CapacityMode "Remaining" })
+$TrayMenuCapacityFormat.DropDownItems.Add($TrayCapRem) | Out-Null
+
+$TrayCapDet = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayCapDet.Text = "Remaining / Full (Wh)"
+$TrayCapDet.Checked = ($Settings.CapacityMode -eq "Detailed")
+$TrayCapDet.Add_Click({ Set-CapacityMode "Detailed" })
+$TrayMenuCapacityFormat.DropDownItems.Add($TrayCapDet) | Out-Null
+
+$TrayCapFull = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayCapFull.Text = "Full Capacity (Wh)"
+$TrayCapFull.Checked = ($Settings.CapacityMode -eq "Full")
+$TrayCapFull.Add_Click({ Set-CapacityMode "Full" })
+$TrayMenuCapacityFormat.DropDownItems.Add($TrayCapFull) | Out-Null
+
+$TrayContextMenu.Items.Add($TrayMenuCapacityFormat) | Out-Null
+
 $TrayMenuResetCounter = New-Object System.Windows.Forms.ToolStripMenuItem
 $TrayMenuResetCounter.Text = "Reset Session Counter"
 $TrayMenuResetCounter.Add_Click({
@@ -537,12 +710,41 @@ function Exit-Application {
     } catch {}
     Save-Settings
     $Timer.Stop()
+    $SaveTimer.Stop()
     $NotifyIcon.Visible = $false
     $NotifyIcon.Dispose()
+    try { $script:ShowEvent.Dispose() } catch {}
     try { $script:AppMutex.ReleaseMutex() } catch {}
     try { $script:AppMutex.Dispose() } catch {}
     [System.Windows.Application]::Current.Shutdown()
 }
+
+# Left-click on Capacity Slot cycles format (Remaining Wh -> Detailed -> Full)
+$SlotCapacity.Add_MouseDown({
+    param($s, $e)
+    if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Left) {
+        Cycle-CapacityMode
+        $e.Handled = $true
+    }
+})
+
+# Left-click on Battery % slot toggles % vs Wh
+$script:PercentShowsWh = $false
+$PercentClickHandler = {
+    param($s, $e)
+    if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Left) {
+        $script:PercentShowsWh = -not $script:PercentShowsWh
+        if ($script:PercentShowsWh) {
+            $remWh = [math]::Round($script:CurrentRemainingMWh / 1000.0, 1)
+            $TxtPercent.Text = "$remWh Wh"
+        } else {
+            $TxtPercent.Text = "$($script:CurrentPercent)%"
+        }
+        $e.Handled = $true
+    }
+}
+$TxtPercent.Add_MouseDown($PercentClickHandler)
+$TxtBatteryIcon.Add_MouseDown($PercentClickHandler)
 
 # Drag window & Double-click toggle
 $MainBorder.Add_MouseLeftButtonDown({
@@ -657,6 +859,14 @@ $script:PowerModeHandler = {
 # Realtime update function (called every 1 second)
 function Update-BatteryStats {
     try {
+        # Check for external show signal (e.g. user re-launched app via shortcut / Launch.bat)
+        if ($script:ShowEvent -and $script:ShowEvent.WaitOne(0)) {
+            $Window.WindowState = [System.Windows.WindowState]::Normal
+            $Window.Show()
+            $Window.Activate()
+            $Window.Topmost = [bool]$Settings.Topmost
+        }
+
         $nowUtc = [DateTime]::UtcNow
         
         # ----------------- Awake Time Accumulation (No Sleep Counting!) -----------------
@@ -685,10 +895,21 @@ function Update-BatteryStats {
         $charging = [bool]$b["Charging"]
         $discharging = [bool]$b["Discharging"]
 
-        # Battery percentage
+        # Battery percentage & capacity telemetry
         $pctFloat = $powerStatus.BatteryLifePercent
         $percentInt = if ($pctFloat -gt 0) { [int]($pctFloat * 100) } else { [int](($remaining / $script:FullCapacity) * 100) }
-        $TxtPercent.Text = "$percentInt%"
+        $script:CurrentPercent = $percentInt
+        $script:CurrentRemainingMWh = $remaining
+
+        if ($script:PercentShowsWh) {
+            $remWh = [math]::Round($remaining / 1000.0, 1)
+            $TxtPercent.Text = "$remWh Wh"
+        } else {
+            $TxtPercent.Text = "$percentInt%"
+        }
+
+        # Update Capacity Slot Text & Tooltip
+        Update-CapacityText
 
         if ($percentInt -le 20) {
             $TxtBatteryIcon.Text = $IconBatLow
@@ -919,7 +1140,14 @@ function Update-BatteryStats {
 
 # Initial state
 Set-CompactMode $Settings.Compact
+Set-CapacitySlotVisibility $Settings.ShowCapacitySlot
 Update-BatteryStats
+
+# Ensure window is explicitly restored and shown
+$Window.WindowState = [System.Windows.WindowState]::Normal
+$Window.Show()
+$Window.Activate()
+$Window.Topmost = [bool]$Settings.Topmost
 
 # Timer for real-time polling (1 second interval)
 $Timer = New-Object System.Windows.Threading.DispatcherTimer
