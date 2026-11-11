@@ -34,6 +34,12 @@ Designed specifically to be sleek, distraction-free, and consume virtually zero 
     2. *Remaining / Full Capacity* (`18.9 / 31.8 Wh`)
     3. *Full Charge Capacity* (`Cap 31.8 Wh`)
 - **🌡️ Live CPU Temperature:** Real-time thermal sensor reading (`°C`) via Windows ACPI Thermal Zone, with dynamic thermal color alerts.
+- **🔥 CPU Power Consumption / TDP Meter (New!):**
+  - Live CPU package power draw in Watts measured directly from Intel RAPL (Running Average Power Limit) hardware energy counters.
+  - Sits right beside CPU Temperature (`🌡️ 52°C | 🔥 4.2 W`).
+  - **Dynamic Thermal Coloring:** Sky Blue (≤ 12 W), Amber (12 W – 25 W), Red (> 25 W boost).
+  - **Cycle Formats:** Left-click on the TDP slot to cycle between Compact (`4.2 W`), With Label (`4.2 W TDP`), or Detailed breakdown (`PKG 4.2W / 2.9W`).
+  - **Toggle on/off:** Easily show or hide via the overlay right-click context menu (`Show CPU Power Meter (TDP)`) or tray icon menu.
 - **⏱️ Dynamic Time Remaining:** Constantly calculated based on your immediate real-time discharge rate.
 - **🪟 Sleek Floating Pill Overlay:**
   - Modern dark acrylic UI with subtle drop shadow and rounded corners.
@@ -76,9 +82,10 @@ This creates a **Battery Overlay** shortcut directly on your Desktop with native
 | **Left Click + Drag** | Move overlay anywhere on screen (auto-saves position). |
 | **Double Click** | Toggle between **Full View** (with Session Card) and **Compact View** (`⚡ 8.4 W  •  🌡️ 55°C`). |
 | **Click Capacity Slot** | Cycle capacity format: Remaining (`18.9 Wh`) → Detailed (`18.9 / 31.8 Wh`) → Full (`Cap 31.8 Wh`). |
+| **Click CPU TDP Slot** | Cycle TDP format: Compact (`4.2 W`) → With Label (`4.2 W TDP`) → Detailed (`PKG 4.2W / Core 2.9W`). |
 | **Click Battery % Slot** | Toggle percentage display between `%` and `Wh`. |
-| **Click `▾` / `▴`** | Collapse or expand the Battery Session Counter Card. |
-| **Right Click (Overlay)** | Open settings menu (Toggle Capacity Slot, Capacity Format, Compact Mode, Show/Hide Session Card, Reset Counter, Always On Top, Opacity, Reset Position, Exit). |
+| **Click `▾` / `▴`** | Collapse or expand the Battery Session Counter Card (persists across restarts). |
+| **Right Click (Overlay)** | Open settings menu (Toggle TDP Slot, TDP Format, Toggle Capacity Slot, Capacity Format, Compact Mode, Show/Hide Session Card, Reset Counter, Always On Top, Opacity, Reset Position, Exit). |
 | **Click `✕`** | Minimize / hide overlay to the Hidden Icons tray. |
 | **Tray Icon (Left Click)** | Toggle overlay visibility (Show / Hide). |
 | **Tray Icon (Right Click)** | Access quick controls, toggle capacity slot, toggle session card, or **Exit Completely**. |

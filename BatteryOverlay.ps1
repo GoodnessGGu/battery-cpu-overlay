@@ -64,6 +64,8 @@ $Settings = @{
     ShowSessionCard = $true
     ShowCapacitySlot = $true
     CapacityMode = "Remaining"     # "Remaining", "Detailed", "Full"
+    ShowTdpSlot = $true
+    TdpMode = "Compact"            # "Compact" (4.2 W), "Label" (4.2 W TDP), "Detailed" (PKG 4.2W / 2.9W)
 }
 
 # Session State - Tracks ACTIVE awake time only (pauses in sleep)
@@ -94,6 +96,8 @@ if (Test-Path $SettingsFile) {
         if ($null -ne $Loaded.ShowSessionCard) { $Settings.ShowSessionCard = [bool]$Loaded.ShowSessionCard }
         if ($null -ne $Loaded.ShowCapacitySlot) { $Settings.ShowCapacitySlot = [bool]$Loaded.ShowCapacitySlot }
         if ($Loaded.CapacityMode) { $Settings.CapacityMode = [string]$Loaded.CapacityMode }
+        if ($null -ne $Loaded.ShowTdpSlot) { $Settings.ShowTdpSlot = [bool]$Loaded.ShowTdpSlot }
+        if ($Loaded.TdpMode) { $Settings.TdpMode = [string]$Loaded.TdpMode }
         
         # Load saved session
         if ($Loaded.SessionState) {
@@ -173,6 +177,15 @@ $Xaml = @"
                 <!-- CPU Temperature -->
                 <TextBlock Name="TxtCpuIcon" Text="&#x1F321;" FontSize="11" Foreground="#00F0FF" VerticalAlignment="Center" Margin="0,0,3,0" Cursor="SizeAll"/>
                 <TextBlock Name="TxtCpuTemp" Text="--&#x00B0;C" FontSize="12.5" FontWeight="Medium" Foreground="#E2E8F0" VerticalAlignment="Center" Cursor="SizeAll"/>
+
+                <!-- Separator TDP -->
+                <Rectangle Name="SepTdp" Width="1" Height="14" Fill="#33FFFFFF" Margin="9,0,9,0" VerticalAlignment="Center"/>
+
+                <!-- CPU Power Consumption / TDP Meter (Click: switch format | Right-click: toggle slot) -->
+                <StackPanel Name="SlotTdp" Orientation="Horizontal" VerticalAlignment="Center" Cursor="Hand" ToolTip="CPU Package Power / TDP (Click: switch format | Right-click: toggle slot)">
+                    <TextBlock Name="TxtTdpIcon" Text="&#x1F525;" FontSize="11" Foreground="#38BDF8" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                    <TextBlock Name="TxtTdp" Text="-- W" FontSize="12.5" FontWeight="Medium" Foreground="#E2E8F0" VerticalAlignment="Center"/>
+                </StackPanel>
 
                 <!-- Separator 3 -->
                 <Rectangle Name="Sep3" Width="1" Height="14" Fill="#33FFFFFF" Margin="9,0,9,0" VerticalAlignment="Center"/>
@@ -271,6 +284,10 @@ $TxtCapacity         = $Window.FindName("TxtCapacity")
 $Sep2                = $Window.FindName("Sep2")
 $TxtCpuIcon          = $Window.FindName("TxtCpuIcon")
 $TxtCpuTemp          = $Window.FindName("TxtCpuTemp")
+$SepTdp              = $Window.FindName("SepTdp")
+$SlotTdp             = $Window.FindName("SlotTdp")
+$TxtTdpIcon          = $Window.FindName("TxtTdpIcon")
+$TxtTdp              = $Window.FindName("TxtTdp")
 $Sep3                = $Window.FindName("Sep3")
 $TxtTimeIcon         = $Window.FindName("TxtTimeIcon")
 $TxtRemaining        = $Window.FindName("TxtRemaining")
@@ -327,6 +344,8 @@ function Save-Settings {
             ShowSessionCard = [bool]$Settings.ShowSessionCard
             ShowCapacitySlot = [bool]$Settings.ShowCapacitySlot
             CapacityMode = [string]$Settings.CapacityMode
+            ShowTdpSlot = [bool]$Settings.ShowTdpSlot
+            TdpMode = [string]$Settings.TdpMode
             SessionState = $SessionState
         }
         $data | ConvertTo-Json -Depth 4 | Set-Content -Path $SettingsFile -Force
@@ -349,6 +368,7 @@ function Set-SessionCardVisibility([bool]$visible) {
         if ($MenuShowCard) { $MenuShowCard.IsChecked = $false }
         if ($TrayMenuCard) { $TrayMenuCard.Checked = $false }
     }
+    Save-Settings
 }
 
 # Toggle Capacity Slot Visibility
@@ -411,6 +431,79 @@ function Update-CapacityText {
     $SlotCapacity.ToolTip = "Battery Capacity: $remWh Wh remaining of $fullWh Wh full charge`nLeft-click: cycle format`nRight-click: toggle slot"
 }
 
+# Toggle CPU TDP Meter Slot Visibility
+function Set-TdpSlotVisibility([bool]$visible) {
+    $Settings.ShowTdpSlot = $visible
+    $vis = if ($visible -and (-not $Settings.Compact)) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
+    $SepTdp.Visibility = $vis
+    $SlotTdp.Visibility = $vis
+    if ($MenuShowTdp) { $MenuShowTdp.IsChecked = $visible }
+    if ($TrayMenuShowTdp) { $TrayMenuShowTdp.Checked = $visible }
+    Save-Settings
+}
+
+# Cycle CPU TDP Mode (Compact -> Label -> Detailed)
+function Cycle-TdpMode {
+    switch ($Settings.TdpMode) {
+        "Compact"  { $Settings.TdpMode = "Label" }
+        "Label"    { $Settings.TdpMode = "Detailed" }
+        default    { $Settings.TdpMode = "Compact" }
+    }
+    Update-TdpDisplay
+    Update-TdpMenuChecks
+    Save-Settings
+}
+
+function Set-TdpMode([string]$mode) {
+    $Settings.TdpMode = $mode
+    Update-TdpDisplay
+    Update-TdpMenuChecks
+    Save-Settings
+}
+
+function Update-TdpMenuChecks {
+    if ($MenuTdpCompact)  { $MenuTdpCompact.IsChecked  = ($Settings.TdpMode -eq "Compact") }
+    if ($MenuTdpLabel)    { $MenuTdpLabel.IsChecked    = ($Settings.TdpMode -eq "Label") }
+    if ($MenuTdpDetailed) { $MenuTdpDetailed.IsChecked = ($Settings.TdpMode -eq "Detailed") }
+    if ($TrayTdpCompact)  { $TrayTdpCompact.Checked    = ($Settings.TdpMode -eq "Compact") }
+    if ($TrayTdpLabel)    { $TrayTdpLabel.Checked      = ($Settings.TdpMode -eq "Label") }
+    if ($TrayTdpDetailed) { $TrayTdpDetailed.Checked   = ($Settings.TdpMode -eq "Detailed") }
+}
+
+$script:CurrentTdpPkgWatts = 0.0
+$script:CurrentTdpCoreWatts = 0.0
+
+function Update-TdpDisplay {
+    $pkgW = $script:CurrentTdpPkgWatts
+    $coreW = $script:CurrentTdpCoreWatts
+
+    switch ($Settings.TdpMode) {
+        "Label" {
+            $TxtTdp.Text = "$pkgW W TDP"
+        }
+        "Detailed" {
+            $TxtTdp.Text = "PKG $pkgW`W / $coreW`W"
+        }
+        default {
+            $TxtTdp.Text = "$pkgW W"
+        }
+    }
+
+    # Dynamic thermal coloring
+    if ($pkgW -ge 25.0) {
+        $TxtTdpIcon.Foreground = $BrushRed
+        $TxtTdp.Foreground = $BrushRedLight
+    } elseif ($pkgW -ge 12.0) {
+        $TxtTdpIcon.Foreground = $BrushAmber
+        $TxtTdp.Foreground = $BrushAmberLight
+    } else {
+        $TxtTdpIcon.Foreground = $BrushSky
+        $TxtTdp.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#E2E8F0")
+    }
+
+    $SlotTdp.ToolTip = "CPU Package Power (RAPL TDP): $pkgW W`nCore Power: $coreW W`nLeft-click: cycle format`nRight-click: toggle slot"
+}
+
 # Toggle Compact Mode
 function Set-CompactMode([bool]$isCompact) {
     $Settings.Compact = $isCompact
@@ -421,6 +514,8 @@ function Set-CompactMode([bool]$isCompact) {
     $TxtPercent.Visibility = [System.Windows.Visibility]::Collapsed
     $SepCap.Visibility = [System.Windows.Visibility]::Collapsed
     $SlotCapacity.Visibility = [System.Windows.Visibility]::Collapsed
+    $SepTdp.Visibility = [System.Windows.Visibility]::Collapsed
+    $SlotTdp.Visibility = [System.Windows.Visibility]::Collapsed
     $Sep3.Visibility = $vis
     $TxtTimeIcon.Visibility = $vis
     $TxtRemaining.Visibility = $vis
@@ -431,6 +526,7 @@ function Set-CompactMode([bool]$isCompact) {
         $TxtBatteryIcon.Visibility = [System.Windows.Visibility]::Visible
         $TxtPercent.Visibility = [System.Windows.Visibility]::Visible
         Set-CapacitySlotVisibility $Settings.ShowCapacitySlot
+        Set-TdpSlotVisibility $Settings.ShowTdpSlot
         Set-SessionCardVisibility $Settings.ShowSessionCard
     } else {
         $CardSession.Visibility = [System.Windows.Visibility]::Collapsed
@@ -516,6 +612,43 @@ $MenuCapFull.Add_Click({ Set-CapacityMode "Full" })
 $MenuCapacityMode.Items.Add($MenuCapFull) | Out-Null
 
 $ContextMenu.Items.Add($MenuCapacityMode) | Out-Null
+
+# Menu Item: Show CPU TDP Meter
+$MenuShowTdp = New-Object System.Windows.Controls.MenuItem
+$MenuShowTdp.Header = "Show CPU Power Meter (TDP)"
+$MenuShowTdp.IsCheckable = $true
+$MenuShowTdp.IsChecked = $Settings.ShowTdpSlot
+$MenuShowTdp.Add_Click({
+    Set-TdpSlotVisibility (-not $Settings.ShowTdpSlot)
+})
+$ContextMenu.Items.Add($MenuShowTdp) | Out-Null
+
+# Menu Item: CPU TDP Format Submenu
+$MenuTdpMode = New-Object System.Windows.Controls.MenuItem
+$MenuTdpMode.Header = "CPU Power (TDP) Format"
+
+$MenuTdpCompact = New-Object System.Windows.Controls.MenuItem
+$MenuTdpCompact.Header = "Compact (e.g. 4.2 W)"
+$MenuTdpCompact.IsCheckable = $true
+$MenuTdpCompact.IsChecked = ($Settings.TdpMode -eq "Compact")
+$MenuTdpCompact.Add_Click({ Set-TdpMode "Compact" })
+$MenuTdpMode.Items.Add($MenuTdpCompact) | Out-Null
+
+$MenuTdpLabel = New-Object System.Windows.Controls.MenuItem
+$MenuTdpLabel.Header = "With Label (e.g. 4.2 W TDP)"
+$MenuTdpLabel.IsCheckable = $true
+$MenuTdpLabel.IsChecked = ($Settings.TdpMode -eq "Label")
+$MenuTdpLabel.Add_Click({ Set-TdpMode "Label" })
+$MenuTdpMode.Items.Add($MenuTdpLabel) | Out-Null
+
+$MenuTdpDetailed = New-Object System.Windows.Controls.MenuItem
+$MenuTdpDetailed.Header = "Detailed (e.g. PKG 4.2W / Core 2.9W)"
+$MenuTdpDetailed.IsCheckable = $true
+$MenuTdpDetailed.IsChecked = ($Settings.TdpMode -eq "Detailed")
+$MenuTdpDetailed.Add_Click({ Set-TdpMode "Detailed" })
+$MenuTdpMode.Items.Add($MenuTdpDetailed) | Out-Null
+
+$ContextMenu.Items.Add($MenuTdpMode) | Out-Null
 
 # Menu Item: Reset Current Battery Session
 $MenuResetSession = New-Object System.Windows.Controls.MenuItem
@@ -663,6 +796,37 @@ $TrayMenuCapacityFormat.DropDownItems.Add($TrayCapFull) | Out-Null
 
 $TrayContextMenu.Items.Add($TrayMenuCapacityFormat) | Out-Null
 
+$TrayMenuShowTdp = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayMenuShowTdp.Text = "Show CPU Power Meter (TDP)"
+$TrayMenuShowTdp.Checked = $Settings.ShowTdpSlot
+$TrayMenuShowTdp.Add_Click({
+    Set-TdpSlotVisibility (-not $Settings.ShowTdpSlot)
+})
+$TrayContextMenu.Items.Add($TrayMenuShowTdp) | Out-Null
+
+$TrayMenuTdpFormat = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayMenuTdpFormat.Text = "CPU Power (TDP) Format"
+
+$TrayTdpCompact = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayTdpCompact.Text = "Compact (e.g. 4.2 W)"
+$TrayTdpCompact.Checked = ($Settings.TdpMode -eq "Compact")
+$TrayTdpCompact.Add_Click({ Set-TdpMode "Compact" })
+$TrayMenuTdpFormat.DropDownItems.Add($TrayTdpCompact) | Out-Null
+
+$TrayTdpLabel = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayTdpLabel.Text = "With Label (e.g. 4.2 W TDP)"
+$TrayTdpLabel.Checked = ($Settings.TdpMode -eq "Label")
+$TrayTdpLabel.Add_Click({ Set-TdpMode "Label" })
+$TrayMenuTdpFormat.DropDownItems.Add($TrayTdpLabel) | Out-Null
+
+$TrayTdpDetailed = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayTdpDetailed.Text = "Detailed (PKG / Core)"
+$TrayTdpDetailed.Checked = ($Settings.TdpMode -eq "Detailed")
+$TrayTdpDetailed.Add_Click({ Set-TdpMode "Detailed" })
+$TrayMenuTdpFormat.DropDownItems.Add($TrayTdpDetailed) | Out-Null
+
+$TrayContextMenu.Items.Add($TrayMenuTdpFormat) | Out-Null
+
 $TrayMenuResetCounter = New-Object System.Windows.Forms.ToolStripMenuItem
 $TrayMenuResetCounter.Text = "Reset Session Counter"
 $TrayMenuResetCounter.Add_Click({
@@ -724,6 +888,15 @@ $SlotCapacity.Add_MouseDown({
     param($s, $e)
     if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Left) {
         Cycle-CapacityMode
+        $e.Handled = $true
+    }
+})
+
+# Left-click on CPU TDP slot cycles format (Compact -> Label -> Detailed)
+$SlotTdp.Add_MouseDown({
+    param($s, $e)
+    if ($e.ChangedButton -eq [System.Windows.Input.MouseButton]::Left) {
+        Cycle-TdpMode
         $e.Handled = $true
     }
 })
@@ -942,6 +1115,26 @@ function Update-BatteryStats {
             }
         }
 
+        # 4. CPU Package Power / TDP Query (Intel RAPL Hardware Meter)
+        try {
+            $raplSearcher = New-Object System.Management.ManagementObjectSearcher("root\cimv2", "SELECT Name, Power FROM Win32_PerfFormattedData_PowerMeterCounter_EnergyMeter WHERE Name LIKE '%PKG%' OR Name LIKE '%PP0%'")
+            $raplItems = $raplSearcher.Get()
+            $pkgMilli = 0.0
+            $coreMilli = 0.0
+            foreach ($item in $raplItems) {
+                $n = [string]$item["Name"]
+                $p = [double]$item["Power"]
+                if ($n -like "*PKG*") {
+                    $pkgMilli = $p
+                } elseif ($n -like "*PP0*") {
+                    $coreMilli = $p
+                }
+            }
+            $script:CurrentTdpPkgWatts = [math]::Round($pkgMilli / 1000.0, 1)
+            $script:CurrentTdpCoreWatts = [math]::Round($coreMilli / 1000.0, 1)
+            Update-TdpDisplay
+        } catch {}
+
         # ----------------- Guaranteed AC Transition Detection -----------------
         if ($null -ne $script:LastIsAc) {
             if ($script:LastIsAc -and $onBattery) {
@@ -1065,59 +1258,59 @@ function Update-BatteryStats {
             $TxtRemaining.ToolTip = "Active time on battery (excluding sleep) • Est. $estLeftStr remaining"
         }
 
-        # ----------------- Session Tracker Card Rendering -----------------
-        if ($onBattery) {
-            # ACTIVE ON BATTERY: Automatically show tracking card!
-            if (-not $Settings.Compact) {
-                $CardSession.Visibility = [System.Windows.Visibility]::Visible
-            }
+        # ----------------- Session Tracker Card Rendering (Respects ShowSessionCard) -----------------
+        if ($Settings.ShowSessionCard -and (-not $Settings.Compact)) {
+            $CardSession.Visibility = [System.Windows.Visibility]::Visible
+            if ($onBattery) {
+                # ACTIVE ON BATTERY
+                $TxtSessionTitleIcon.Text = $IconBat
+                $TxtSessionTitle.Text = "Battery Session (Active)"
+                $TxtSessionTitle.Foreground = $BrushSky
 
-            $TxtSessionTitleIcon.Text = $IconBat
-            $TxtSessionTitle.Text = "Battery Session (Active)"
-            $TxtSessionTitle.Foreground = $BrushSky
+                # Running Stopwatch (HH:MM:SS)
+                $TxtSessionTimer.Text = $liveStopwatch
 
-            # Running Stopwatch (HH:MM:SS)
-            $TxtSessionTimer.Text = $liveStopwatch
+                # Start info
+                $startStr = if ($script:SessionState.StartTimeStr) {
+                    $script:SessionState.StartTimeStr
+                } elseif ($script:SessionState.StartTime) {
+                    try { [DateTime]::Parse($script:SessionState.StartTime).ToString("h:mm tt") } catch { "" }
+                } else { "" }
+                
+                $TxtSessionStart.Text = "Started at: $($script:SessionState.StartPercent)% $(if ($startStr) { "($startStr)" })"
 
-            # Start info
-            $startStr = if ($script:SessionState.StartTimeStr) {
-                $script:SessionState.StartTimeStr
-            } elseif ($script:SessionState.StartTime) {
-                try { [DateTime]::Parse($script:SessionState.StartTime).ToString("h:mm tt") } catch { "" }
-            } else { "" }
-            
-            $TxtSessionStart.Text = "Started at: $($script:SessionState.StartPercent)% $(if ($startStr) { "($startStr)" })"
+                # Power Consumed (%)
+                $pctDropped = $script:SessionState.StartPercent - $percentInt
+                if ($pctDropped -lt 0) { $pctDropped = 0 }
+                $TxtSessionUsed.Text = "Used: $pctDropped%"
 
-            # Power Consumed (%)
-            $pctDropped = $script:SessionState.StartPercent - $percentInt
-            if ($pctDropped -lt 0) { $pctDropped = 0 }
-            $TxtSessionUsed.Text = "Used: $pctDropped%"
+                # Energy Consumed (Wh)
+                $mwhUsed = $script:SessionState.StartMWh - $remaining
+                $whUsed = if ($mwhUsed -gt 0) { [math]::Round($mwhUsed / 1000, 1) } else { 0.0 }
+                $TxtSessionEnergy.Text = "-$whUsed Wh"
 
-            # Energy Consumed (Wh)
-            $mwhUsed = $script:SessionState.StartMWh - $remaining
-            $whUsed = if ($mwhUsed -gt 0) { [math]::Round($mwhUsed / 1000, 1) } else { 0.0 }
-            $TxtSessionEnergy.Text = "-$whUsed Wh"
-
-            # Est Remaining
-            $TxtSessionEst.Text = "Est: $estLeftStr left"
-            $SepSessionEst.Visibility = [System.Windows.Visibility]::Visible
-            $TxtSessionEst.Visibility = [System.Windows.Visibility]::Visible
-        } else {
-            # ON AC POWER (PLUGGED IN)
-            if ($script:SessionState.HasLastSession -and (-not $Settings.Compact)) {
-                $CardSession.Visibility = [System.Windows.Visibility]::Visible
-                $TxtSessionTitleIcon.Text = $IconPlug
-                $TxtSessionTitle.Text = "Last Battery Session (Summary)"
-                $TxtSessionTitle.Foreground = $BrushGreenLight
-                $TxtSessionTimer.Text = $script:SessionState.LastDuration
-                $TxtSessionStart.Text = "Started: $($script:SessionState.StartPercent)%"
-                $TxtSessionUsed.Text = "Used: $($script:SessionState.LastUsedPercent)%"
-                $TxtSessionEnergy.Text = "-$($script:SessionState.LastUsedWh) Wh (Avg $($script:SessionState.LastAvgWatts) W)"
-                $SepSessionEst.Visibility = [System.Windows.Visibility]::Collapsed
-                $TxtSessionEst.Visibility = [System.Windows.Visibility]::Collapsed
+                # Est Remaining
+                $TxtSessionEst.Text = "Est: $estLeftStr left"
+                $SepSessionEst.Visibility = [System.Windows.Visibility]::Visible
+                $TxtSessionEst.Visibility = [System.Windows.Visibility]::Visible
             } else {
-                $CardSession.Visibility = [System.Windows.Visibility]::Collapsed
+                # ON AC POWER (PLUGGED IN)
+                if ($script:SessionState.HasLastSession) {
+                    $TxtSessionTitleIcon.Text = $IconPlug
+                    $TxtSessionTitle.Text = "Last Battery Session (Summary)"
+                    $TxtSessionTitle.Foreground = $BrushGreenLight
+                    $TxtSessionTimer.Text = $script:SessionState.LastDuration
+                    $TxtSessionStart.Text = "Started: $($script:SessionState.StartPercent)%"
+                    $TxtSessionUsed.Text = "Used: $($script:SessionState.LastUsedPercent)%"
+                    $TxtSessionEnergy.Text = "-$($script:SessionState.LastUsedWh) Wh (Avg $($script:SessionState.LastAvgWatts) W)"
+                    $SepSessionEst.Visibility = [System.Windows.Visibility]::Collapsed
+                    $TxtSessionEst.Visibility = [System.Windows.Visibility]::Collapsed
+                } else {
+                    $CardSession.Visibility = [System.Windows.Visibility]::Collapsed
+                }
             }
+        } else {
+            $CardSession.Visibility = [System.Windows.Visibility]::Collapsed
         }
 
         # ----------------- Update Tray Tooltip (max 63 chars) -----------------
@@ -1141,6 +1334,7 @@ function Update-BatteryStats {
 # Initial state
 Set-CompactMode $Settings.Compact
 Set-CapacitySlotVisibility $Settings.ShowCapacitySlot
+Set-TdpSlotVisibility $Settings.ShowTdpSlot
 Update-BatteryStats
 
 # Ensure window is explicitly restored and shown
