@@ -13,13 +13,14 @@ Designed specifically to be sleek, distraction-free, and consume virtually zero 
   - **Amber** (8.5 W – 15 W): Normal / moderate usage.
   - **Red** (> 15 W): Heavy energy consumption.
   - **Emerald Green**: Plugged into AC (displays live `+X.X W` charging rate).
-- **📊 Dynamic Battery Session Counter Card (New!):**
-  - **Auto-Trigger on Battery:** Activates automatically the moment AC power is unplugged.
-  - **Running Stopwatch:** Live elapsed timer (`HH:MM:SS`) tracking your active battery session.
-  - **Starting Charge Tracker:** Captures and displays the exact battery percentage and timestamp when AC power was disconnected (e.g. `Start: 85% (11:30 AM)`).
+- **📊 Dynamic Battery Session Counter Card:**
+  - **Auto-Trigger on Battery:** Activates automatically the moment AC power is unplugged and resets to track the new session.
+  - **Running Stopwatch:** Live elapsed timer (`HH:MM:SS`) tracking your active battery session in both the primary status bar and the detailed session card.
+  - **Active Awake Time Only:** Smart sleep / Modern Standby detection pauses the counter while the laptop is asleep or suspended, counting true screen-on active time only.
+  - **Starting Charge Tracker:** Captures and displays the exact battery percentage and timestamp when AC power was disconnected (e.g. `Started at: 85% (11:30 AM)`).
   - **Power Consumed:** Live percentage dropped (e.g. `Used: 12%`).
-  - **Energy Telemetry:** Real-time energy drained in Watt-hours (`-3.8 Wh`) and session average power draw (`Avg 9.2 W`).
-  - **AC Final Session Summary:** When plugged back into AC, the timer freezes and logs the complete session summary until your next battery run.
+  - **Energy Telemetry:** Real-time energy drained in Watt-hours (`-3.8 Wh`) and live discharge rate in Watts.
+  - **AC Final Session Summary:** When plugged back into AC, displays the complete session summary until your next battery run.
   - **Persistent Session State:** Remembers elapsed time and initial percentages across overlay minimizations, toggles, and app restarts during the same battery run.
   - **Collapsible:** Toggle the card open or closed via the `▾` button or right-click menu.
 - **🌡️ Live CPU Temperature:** Real-time thermal sensor reading (`°C`) via Windows ACPI Thermal Zone, with dynamic thermal color alerts.
