@@ -15,7 +15,7 @@ $script:CreatedNewMutex = $false
 $script:AppMutex = $null
 
 try {
-    $script:AppMutex = New-Object System.Threading.Mutex($true, $script:MutexName, [ref]$script:CreatedNewMutex)
+    $script:AppMutex = [System.Threading.Mutex]::new($true, $script:MutexName, [ref]$script:CreatedNewMutex)
 } catch [System.Threading.AbandonedMutexException] {
     $script:CreatedNewMutex = $true
 } catch {
@@ -34,7 +34,7 @@ if (-not $script:CreatedNewMutex) {
 
 # Main instance: create show signal event
 try {
-    $script:ShowEvent = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::AutoReset, $script:ShowEventName)
+    $script:ShowEvent = [System.Threading.EventWaitHandle]::new($false, [System.Threading.EventResetMode]::AutoReset, $script:ShowEventName)
 } catch {
     $script:ShowEvent = $null
 }
