@@ -46,6 +46,7 @@ $IconPlug    = [char]::ConvertFromUtf32(0x1F50C)  # 🔌
 $IconBat     = [char]::ConvertFromUtf32(0x1F50B)  # 🔋
 $IconBatLow  = [char]::ConvertFromUtf32(0x1FAAB)  # 🪫
 $IconTemp    = [char]::ConvertFromUtf32(0x1F321)  # 🌡
+$IconBell    = [char]::ConvertFromUtf32(0x1F514)  # 🔔
 
 # Path configuration
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -66,6 +67,9 @@ $Settings = @{
     CapacityMode = "Remaining"     # "Remaining", "Detailed", "Full"
     ShowTdpSlot = $true
     TdpMode = "Compact"            # "Compact" (4.2 W), "Label" (4.2 W TDP), "Detailed" (PKG 4.2W / 2.9W)
+    ChargeTargetAlert = $true      # BalancedMode II alert
+    ChargeTargetPercent = 90       # Alert target %
+    ChargeAlertSound = $true       # Chime on reaching target
 }
 
 # Session State - Tracks ACTIVE awake time only (pauses in sleep)
@@ -98,6 +102,9 @@ if (Test-Path $SettingsFile) {
         if ($Loaded.CapacityMode) { $Settings.CapacityMode = [string]$Loaded.CapacityMode }
         if ($null -ne $Loaded.ShowTdpSlot) { $Settings.ShowTdpSlot = [bool]$Loaded.ShowTdpSlot }
         if ($Loaded.TdpMode) { $Settings.TdpMode = [string]$Loaded.TdpMode }
+        if ($null -ne $Loaded.ChargeTargetAlert) { $Settings.ChargeTargetAlert = [bool]$Loaded.ChargeTargetAlert }
+        if ($Loaded.ChargeTargetPercent) { $Settings.ChargeTargetPercent = [int]$Loaded.ChargeTargetPercent }
+        if ($null -ne $Loaded.ChargeAlertSound) { $Settings.ChargeAlertSound = [bool]$Loaded.ChargeAlertSound }
         
         # Load saved session
         if ($Loaded.SessionState) {
@@ -320,6 +327,7 @@ $BrushRedLight   = [System.Windows.Media.BrushConverter]::new().ConvertFromStrin
 $BrushGreen      = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#10B981")
 $BrushGreenLight = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#34D399")
 $BrushSky        = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#38BDF8")
+$BrushWhite      = [System.Windows.Media.BrushConverter]::new().ConvertFromString("#F8FAFC")
 
 # Helper to format seconds as HH:MM:SS cleanly without FormatException
 function Format-DurationSec([double]$seconds) {
@@ -346,6 +354,9 @@ function Save-Settings {
             CapacityMode = [string]$Settings.CapacityMode
             ShowTdpSlot = [bool]$Settings.ShowTdpSlot
             TdpMode = [string]$Settings.TdpMode
+            ChargeTargetAlert = [bool]$Settings.ChargeTargetAlert
+            ChargeTargetPercent = [int]$Settings.ChargeTargetPercent
+            ChargeAlertSound = [bool]$Settings.ChargeAlertSound
             SessionState = $SessionState
         }
         $data | ConvertTo-Json -Depth 4 | Set-Content -Path $SettingsFile -Force
@@ -543,6 +554,55 @@ function Set-CompactMode([bool]$isCompact) {
     }
 }
 
+# ----------------- Charge Target Alert Functions (BalancedMode II) -----------------
+$script:ChargeTargetAlertFired = $false
+
+function Set-ChargeTargetAlert([bool]$enabled) {
+    $Settings.ChargeTargetAlert = $enabled
+    if ($MenuChargeAlert) { $MenuChargeAlert.IsChecked = $enabled }
+    if ($TrayMenuChargeAlert) { $TrayMenuChargeAlert.Checked = $enabled }
+    Save-Settings
+}
+
+function Set-ChargeTargetPercent([int]$pct) {
+    $Settings.ChargeTargetPercent = $pct
+    $script:ChargeTargetAlertFired = $false
+    Update-ChargeAlertMenuText
+    Save-Settings
+}
+
+function Set-ChargeAlertSound([bool]$enabled) {
+    $Settings.ChargeAlertSound = $enabled
+    if ($MenuChargeSound) { $MenuChargeSound.IsChecked = $enabled }
+    if ($TrayMenuChargeSound) { $TrayMenuChargeSound.Checked = $enabled }
+    Save-Settings
+}
+
+function Update-ChargeAlertMenuText {
+    $txt = "Charge Target Alert ($($Settings.ChargeTargetPercent)%)"
+    if ($MenuChargeAlert) { 
+        $MenuChargeAlert.Header = $txt
+        $MenuChargeAlert.IsChecked = [bool]$Settings.ChargeTargetAlert 
+    }
+    if ($TrayMenuChargeAlert) { 
+        $TrayMenuChargeAlert.Text = $txt
+        $TrayMenuChargeAlert.Checked = [bool]$Settings.ChargeTargetAlert 
+    }
+
+    if ($MenuTarget80) { $MenuTarget80.IsChecked = ($Settings.ChargeTargetPercent -eq 80) }
+    if ($MenuTarget85) { $MenuTarget85.IsChecked = ($Settings.ChargeTargetPercent -eq 85) }
+    if ($MenuTarget90) { $MenuTarget90.IsChecked = ($Settings.ChargeTargetPercent -eq 90) }
+    if ($MenuTarget95) { $MenuTarget95.IsChecked = ($Settings.ChargeTargetPercent -eq 95) }
+
+    if ($TrayTarget80) { $TrayTarget80.Checked = ($Settings.ChargeTargetPercent -eq 80) }
+    if ($TrayTarget85) { $TrayTarget85.Checked = ($Settings.ChargeTargetPercent -eq 85) }
+    if ($TrayTarget90) { $TrayTarget90.Checked = ($Settings.ChargeTargetPercent -eq 90) }
+    if ($TrayTarget95) { $TrayTarget95.Checked = ($Settings.ChargeTargetPercent -eq 95) }
+
+    if ($MenuChargeSound) { $MenuChargeSound.IsChecked = [bool]$Settings.ChargeAlertSound }
+    if ($TrayMenuChargeSound) { $TrayMenuChargeSound.Checked = [bool]$Settings.ChargeAlertSound }
+}
+
 $BtnToggleCard.Add_Click({
     Set-SessionCardVisibility (-not $Settings.ShowSessionCard)
     Save-Settings
@@ -649,6 +709,59 @@ $MenuTdpDetailed.Add_Click({ Set-TdpMode "Detailed" })
 $MenuTdpMode.Items.Add($MenuTdpDetailed) | Out-Null
 
 $ContextMenu.Items.Add($MenuTdpMode) | Out-Null
+
+# Menu Item: Charge Target Alert (BalancedMode II)
+$MenuChargeAlert = New-Object System.Windows.Controls.MenuItem
+$MenuChargeAlert.Header = "Charge Target Alert ($($Settings.ChargeTargetPercent)%)"
+$MenuChargeAlert.IsCheckable = $true
+$MenuChargeAlert.IsChecked = $Settings.ChargeTargetAlert
+$MenuChargeAlert.Add_Click({
+    Set-ChargeTargetAlert (-not $Settings.ChargeTargetAlert)
+})
+$ContextMenu.Items.Add($MenuChargeAlert) | Out-Null
+
+# Menu Item: Charge Target Level Submenu
+$MenuTargetLevel = New-Object System.Windows.Controls.MenuItem
+$MenuTargetLevel.Header = "Charge Target Level"
+
+$MenuTarget80 = New-Object System.Windows.Controls.MenuItem
+$MenuTarget80.Header = "80% (ASUS Balanced)"
+$MenuTarget80.IsCheckable = $true
+$MenuTarget80.IsChecked = ($Settings.ChargeTargetPercent -eq 80)
+$MenuTarget80.Add_Click({ Set-ChargeTargetPercent 80 })
+$MenuTargetLevel.Items.Add($MenuTarget80) | Out-Null
+
+$MenuTarget85 = New-Object System.Windows.Controls.MenuItem
+$MenuTarget85.Header = "85%"
+$MenuTarget85.IsCheckable = $true
+$MenuTarget85.IsChecked = ($Settings.ChargeTargetPercent -eq 85)
+$MenuTarget85.Add_Click({ Set-ChargeTargetPercent 85 })
+$MenuTargetLevel.Items.Add($MenuTarget85) | Out-Null
+
+$MenuTarget90 = New-Object System.Windows.Controls.MenuItem
+$MenuTarget90.Header = "90% (BalancedMode II)"
+$MenuTarget90.IsCheckable = $true
+$MenuTarget90.IsChecked = ($Settings.ChargeTargetPercent -eq 90)
+$MenuTarget90.Add_Click({ Set-ChargeTargetPercent 90 })
+$MenuTargetLevel.Items.Add($MenuTarget90) | Out-Null
+
+$MenuTarget95 = New-Object System.Windows.Controls.MenuItem
+$MenuTarget95.Header = "95%"
+$MenuTarget95.IsCheckable = $true
+$MenuTarget95.IsChecked = ($Settings.ChargeTargetPercent -eq 95)
+$MenuTarget95.Add_Click({ Set-ChargeTargetPercent 95 })
+$MenuTargetLevel.Items.Add($MenuTarget95) | Out-Null
+
+$ContextMenu.Items.Add($MenuTargetLevel) | Out-Null
+
+$MenuChargeSound = New-Object System.Windows.Controls.MenuItem
+$MenuChargeSound.Header = "Play Alert Sound on Target"
+$MenuChargeSound.IsCheckable = $true
+$MenuChargeSound.IsChecked = $Settings.ChargeAlertSound
+$MenuChargeSound.Add_Click({
+    Set-ChargeAlertSound (-not $Settings.ChargeAlertSound)
+})
+$ContextMenu.Items.Add($MenuChargeSound) | Out-Null
 
 # Menu Item: Reset Current Battery Session
 $MenuResetSession = New-Object System.Windows.Controls.MenuItem
@@ -826,6 +939,51 @@ $TrayTdpDetailed.Add_Click({ Set-TdpMode "Detailed" })
 $TrayMenuTdpFormat.DropDownItems.Add($TrayTdpDetailed) | Out-Null
 
 $TrayContextMenu.Items.Add($TrayMenuTdpFormat) | Out-Null
+
+$TrayMenuChargeAlert = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayMenuChargeAlert.Text = "Charge Target Alert ($($Settings.ChargeTargetPercent)%)"
+$TrayMenuChargeAlert.Checked = $Settings.ChargeTargetAlert
+$TrayMenuChargeAlert.Add_Click({
+    Set-ChargeTargetAlert (-not $Settings.ChargeTargetAlert)
+})
+$TrayContextMenu.Items.Add($TrayMenuChargeAlert) | Out-Null
+
+$TrayMenuTargetLevel = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayMenuTargetLevel.Text = "Charge Target Level"
+
+$TrayTarget80 = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayTarget80.Text = "80% (ASUS Balanced)"
+$TrayTarget80.Checked = ($Settings.ChargeTargetPercent -eq 80)
+$TrayTarget80.Add_Click({ Set-ChargeTargetPercent 80 })
+$TrayMenuTargetLevel.DropDownItems.Add($TrayTarget80) | Out-Null
+
+$TrayTarget85 = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayTarget85.Text = "85%"
+$TrayTarget85.Checked = ($Settings.ChargeTargetPercent -eq 85)
+$TrayTarget85.Add_Click({ Set-ChargeTargetPercent 85 })
+$TrayMenuTargetLevel.DropDownItems.Add($TrayTarget85) | Out-Null
+
+$TrayTarget90 = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayTarget90.Text = "90% (BalancedMode II)"
+$TrayTarget90.Checked = ($Settings.ChargeTargetPercent -eq 90)
+$TrayTarget90.Add_Click({ Set-ChargeTargetPercent 90 })
+$TrayMenuTargetLevel.DropDownItems.Add($TrayTarget90) | Out-Null
+
+$TrayTarget95 = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayTarget95.Text = "95%"
+$TrayTarget95.Checked = ($Settings.ChargeTargetPercent -eq 95)
+$TrayTarget95.Add_Click({ Set-ChargeTargetPercent 95 })
+$TrayMenuTargetLevel.DropDownItems.Add($TrayTarget95) | Out-Null
+
+$TrayContextMenu.Items.Add($TrayMenuTargetLevel) | Out-Null
+
+$TrayMenuChargeSound = New-Object System.Windows.Forms.ToolStripMenuItem
+$TrayMenuChargeSound.Text = "Play Alert Sound on Target"
+$TrayMenuChargeSound.Checked = $Settings.ChargeAlertSound
+$TrayMenuChargeSound.Add_Click({
+    Set-ChargeAlertSound (-not $Settings.ChargeAlertSound)
+})
+$TrayContextMenu.Items.Add($TrayMenuChargeSound) | Out-Null
 
 $TrayMenuResetCounter = New-Object System.Windows.Forms.ToolStripMenuItem
 $TrayMenuResetCounter.Text = "Reset Session Counter"
@@ -1213,8 +1371,31 @@ function Update-BatteryStats {
             $TxtWattage.Foreground = $BrushGreenLight
             $TxtTimeIcon.Text = $IconPlug
             $TxtTimeIcon.Foreground = $BrushGreen
-            
-            if ($percentInt -ge 99 -or ($percentInt -ge 79 -and $chargeRate -eq 0)) {
+            $TxtRemaining.Foreground = $BrushWhite
+
+            # Reset alert latch if battery dropped below target by at least 3% while on AC
+            if ($percentInt -lt ($Settings.ChargeTargetPercent - 3)) {
+                $script:ChargeTargetAlertFired = $false
+            }
+
+            if ($Settings.ChargeTargetAlert -and ($percentInt -ge $Settings.ChargeTargetPercent)) {
+                if (-not $script:ChargeTargetAlertFired) {
+                    $script:ChargeTargetAlertFired = $true
+                    if ($Settings.ChargeAlertSound) {
+                        try { [System.Media.SystemSounds]::Exclamation.Play() } catch {}
+                    }
+                    if ($NotifyIcon) {
+                        try {
+                            $NotifyIcon.ShowBalloonTip(6000, "⚡ Battery Target Reached ($($Settings.ChargeTargetPercent)%)", "Battery reached $($percentInt)%! Unplug AC to preserve battery health (BalancedMode II).", [System.Windows.Forms.ToolTipIcon]::Info)
+                        } catch {}
+                    }
+                }
+                $TxtTimeIcon.Text = $IconBell
+                $TxtTimeIcon.Foreground = $BrushAmber
+                $TxtRemaining.Text = "Target $($Settings.ChargeTargetPercent)%! Unplug"
+                $TxtRemaining.Foreground = $BrushAmberLight
+                $TxtRemaining.ToolTip = "Battery reached $($percentInt)% target. Unplug AC to preserve battery lifespan!"
+            } elseif ($percentInt -ge 99 -or ($percentInt -ge 79 -and $chargeRate -eq 0)) {
                 $TxtRemaining.Text = "Full / Capped"
                 $TxtRemaining.ToolTip = "Battery full or capped at health threshold"
             } elseif ($chargeRate -gt 0) {
@@ -1233,6 +1414,8 @@ function Update-BatteryStats {
             }
         } else {
             # Discharging on Battery
+            $script:ChargeTargetAlertFired = $false
+            $TxtRemaining.Foreground = $BrushWhite
             $watts = [math]::Round($dischargeRate / 1000, 1)
             $TxtWattage.Text = "$watts W"
             $statusSummary = "$watts W"
@@ -1317,7 +1500,11 @@ function Update-BatteryStats {
         $trayTip = if ($onBattery) {
             "Bat: $percentInt% ($statusSummary) | $liveStopwatch | CPU: $celsius`°C"
         } else {
-            "AC Power ($percentInt%) | CPU: $celsius`°C"
+            if ($Settings.ChargeTargetAlert -and ($percentInt -ge $Settings.ChargeTargetPercent)) {
+                "Target reached: $percentInt%! Unplug AC | CPU: $celsius`°C"
+            } else {
+                "AC Power ($percentInt%) | CPU: $celsius`°C"
+            }
         }
         if ($trayTip.Length -gt 63) { $trayTip = $trayTip.Substring(0, 63) }
         $NotifyIcon.Text = $trayTip
@@ -1335,6 +1522,7 @@ function Update-BatteryStats {
 Set-CompactMode $Settings.Compact
 Set-CapacitySlotVisibility $Settings.ShowCapacitySlot
 Set-TdpSlotVisibility $Settings.ShowTdpSlot
+Update-ChargeAlertMenuText
 Update-BatteryStats
 
 # Ensure window is explicitly restored and shown

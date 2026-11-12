@@ -13,6 +13,13 @@ Designed specifically to be sleek, distraction-free, and consume virtually zero 
   - **Amber** (8.5 W – 15 W): Normal / moderate usage.
   - **Red** (> 15 W): Heavy energy consumption.
   - **Emerald Green**: Plugged into AC (displays live `+X.X W` charging rate).
+- **🔔 Smart Charge Target Alert ("BalancedMode II" at 90%):**
+  - Designed for laptops (like ASUS ZenBooks) whose hardware firmware only allows 80% or 100% caps. BalancedMode II gives you 90% battery capacity for extended unplugged endurance while protecting battery lifespan.
+  - **Custom Target Level:** Select between 80% (ASUS Balanced), 85%, **90% (BalancedMode II)**, or 95% target thresholds.
+  - **Live Unplug Notification:** The moment your laptop reaches target on AC, plays a system chime and delivers a Windows balloon tip advising you to unplug.
+  - **Visual Indicator:** The top status bar displays `🔔 Target 90%! Unplug` in glowing amber.
+  - **Auto-Rearming:** Automatically resets when you unplug or if charge drops 3% below target.
+  - **Fully Configurable:** Toggle alert on/off, customize target level, or mute sound directly from the right-click menu or tray icon.
 - **📊 Dynamic Battery Session Counter Card:**
   - **Auto-Trigger on Battery:** Activates automatically the moment AC power is unplugged and resets to track the new session.
   - **Running Stopwatch:** Live elapsed timer (`HH:MM:SS`) tracking your active battery session in both the primary status bar and the detailed session card.
@@ -85,7 +92,8 @@ This creates a **Battery Overlay** shortcut directly on your Desktop with native
 | **Click CPU TDP Slot** | Cycle TDP format: Compact (`4.2 W`) → With Label (`4.2 W TDP`) → Detailed (`PKG 4.2W / Core 2.9W`). |
 | **Click Battery % Slot** | Toggle percentage display between `%` and `Wh`. |
 | **Click `▾` / `▴`** | Collapse or expand the Battery Session Counter Card (persists across restarts). |
-| **Right Click (Overlay)** | Open settings menu (Toggle TDP Slot, TDP Format, Toggle Capacity Slot, Capacity Format, Compact Mode, Show/Hide Session Card, Reset Counter, Always On Top, Opacity, Reset Position, Exit). |
+| **Right Click (Overlay)** | Open settings menu (Toggle TDP Slot, TDP Format, Toggle Capacity Slot, Capacity Format, Charge Target Alert / BalancedMode II, Compact Mode, Show/Hide Session Card, Reset Counter, Always On Top, Opacity, Reset Position, Exit). |
+| **Charge Target Alert** | Configure in Right Click Menu or Tray Menu: Toggle alert on/off, choose target (80%, 85%, 90% BalancedMode II, 95%), or toggle alert sound chime. |
 | **Click `✕`** | Minimize / hide overlay to the Hidden Icons tray. |
 | **Tray Icon (Left Click)** | Toggle overlay visibility (Show / Hide). |
 | **Tray Icon (Right Click)** | Access quick controls, toggle capacity slot, toggle session card, or **Exit Completely**. |
