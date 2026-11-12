@@ -1528,7 +1528,7 @@ Update-BatteryStats
 # Ensure window is explicitly restored and shown
 $Window.WindowState = [System.Windows.WindowState]::Normal
 $Window.Show()
-$Window.Activate()
+$Window.Activate() | Out-Null
 $Window.Topmost = [bool]$Settings.Topmost
 
 # Timer for real-time polling (1 second interval)
