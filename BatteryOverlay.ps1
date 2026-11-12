@@ -1555,4 +1555,5 @@ $Window.Add_Closing({
 
 # Show Overlay
 $App = New-Object System.Windows.Application
+$App.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
 $App.Run($Window) | Out-Null
